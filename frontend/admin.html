@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CamplongCoin — Backoffice</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <style>
+        :root {
+            --primary: #1e293b;
+            --accent: #ea580c;
+            --bg: #f1f5f9;
+            --border: #cbd5e1;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, system-ui, sans-serif;
+            max-width: 900px;
+            margin: 1em auto;
+            padding: 1em;
+            background: var(--bg);
+            color: #0f172a;
+        }
+
+        h1,
+        h2,
+        h3 {
+            color: var(--primary);
+        }
+
+        h1 {
+            margin: 0;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1em;
+        }
+
+        .card {
+            background: white;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.2em;
+            margin-bottom: 1em;
+        }
+
+        input,
+        button,
+        select {
+            padding: .6em;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 1em;
+            font-family: inherit;
+        }
+
+        button {
+            background: var(--accent);
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            padding: .6em 1.2em;
+        }
+
+        button:hover:not(:disabled) {
+            background: #c2410c;
+        }
+
+        button:disabled {
+            background: #94a3b8;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: white;
+            color: #334155;
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: #f1f5f9;
+        }
+
+        .btn-danger {
+            background: #dc2626;
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            background: #991b1b;
+        }
+
+        .row {
+            display: flex;
+            gap: .5em;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .row>* {
+            flex-shrink: 0;
+        }
+
+        .row input[type=number] {
+            width: 110px;
+        }
+
+        .row input[type=text],
+        .row input[type=password] {
+            flex: 1;
+            min-width: 150px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th,
+        td {
+            padding: .6em .4em;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+
+        th {
+            font-size: .8em;
+            text-transform: uppercase;
+            color: #64748b;
+            font-weight: 600;
+        }
+
+        .mono {
+            font-family: ui-monospace, monospace;
+            font-size: .85em;
+            color: #475569;
+        }
+
+        .balance {
+            font-size: 1.1em;
+            font-weight: 700;
+        }
+
+        .error {
+            background: #fef2f2;
+            color: #991b1b;
+            padding: .6em;
+            border-radius: 6px;
+            margin: .5em 0;
+        }
+
+        .success {
+            background: #ecfdf5;
+            color: #065f46;
+            padding: .6em;
+            border-radius: 6px;
+            margin: .5em 0;
+        }
+
+        a {
+            color: var(--accent);
+        }
+
+        .treasury-box {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            color: white;
+            padding: 1.2em;
+            border-radius: 8px;
+            margin-bottom: 1em;
+        }
+
+        .treasury-box h2 {
+            color: white;
+            margin: 0 0 .5em 0;
+        }
+
+        .treasury-stats {
+            display: flex;
+            gap: 2em;
+            margin-top: .5em;
+        }
+
+        .stat-label {
+            font-size: .8em;
+            opacity: .7;
+        }
+
+        .stat-value {
+            font-size: 1.3em;
+            font-weight: 700;
+        }
+
+        .actions {
+            display: flex;
+            gap: .4em;
+            flex-wrap: wrap;
+        }
+
+        .actions button {
+            padding: .4em .8em;
+            font-size: .9em;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="app">
+
+        <!-- LOGIN -->
+        <div v-if="!token" class="card">
+            <h1>Backoffice CamplongCoin</h1>
+            <p>Mot de passe admin requis.</p>
+            <div class="row">
+                <input v-model="loginPwd" type="password" placeholder="mot de passe admin" @keyup.enter="doLogin" />
+                <button @click="doLogin" :disabled="loading">{{ loading ? '...' : 'Connexion' }}</button>
+            </div>
+            <div v-if="error" class="error">{{ error }}</div>
+        </div>
+
+        <!-- CONNECTE -->
+        <div v-else>
+
+            <div class="header">
+                <h1>Backoffice CamplongCoin</h1>
+                <button class="btn-secondary" @click="logout">Logout</button>
+            </div>
+
+            <!-- TREASURY -->
+            <div class="treasury-box">
+                <h2>Treasury (ton portefeuille)</h2>
+                <div class="mono" style="word-break:break-all">{{ treasury.address }}</div>
+                <div class="treasury-stats">
+                    <div>
+                        <div class="stat-label">CAMP</div>
+                        <div class="stat-value">{{ formatNum(treasury.balance_camp) }}</div>
+                    </div>
+                    <div>
+                        <div class="stat-label">ETH (gas)</div>
+                        <div class="stat-value">{{ treasury.balance_eth?.toFixed(4) }}</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CREATION USER -->
+            <div class="card">
+                <h3 style="margin-top:0">Créer un nouveau user</h3>
+                <div class="row" style="margin-bottom:.5em">
+                    <input v-model="newUser.username" type="text" placeholder="pseudo (ex: Charles)" />
+                    <input v-model="newUser.user_password" type="text" placeholder="mot de passe initial" />
+                    <input v-model.number="newUser.initial_camp" type="number" min="0" placeholder="CAMP" />
+                    <button @click="createUser" :disabled="creating || !canCreate">
+                        {{ creating ? 'Création...' : 'Créer' }}
+                    </button>
+                </div>
+                <p style="color:#64748b; font-size:.85em; margin: .2em 0">
+                    Le user recevra automatiquement ~0.005 ETH (pour le gas) + les CAMP indiqués.
+                </p>
+            </div>
+
+            <!-- LISTE USERS -->
+            <div class="card">
+                <div class="header" style="margin-bottom:.5em">
+                    <h3 style="margin:0">Users existants ({{ users.length }})</h3>
+                    <button class="btn-secondary" @click="refresh" :disabled="refreshing">
+                        {{ refreshing ? '...' : 'Rafraîchir' }}
+                    </button>
+                </div>
+                <table v-if="users.length">
+                    <thead>
+                        <tr>
+                            <th>Pseudo</th>
+                            <th>Adresse</th>
+                            <th>CAMP</th>
+                            <th>ETH</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="u in users" :key="u.username">
+                            <td><b>{{ u.username }}</b></td>
+                            <td class="mono">
+                                <a :href="'https://sepolia.basescan.org/address/' + u.address" target="_blank">
+                                    {{ shortAddr(u.address) }}
+                                </a>
+                            </td>
+                            <td class="balance">{{ formatNum(u.balance_camp) }}</td>
+                            <td>{{ u.balance_eth.toFixed(4) }}</td>
+                            <td class="actions">
+                                <button class="btn-secondary" @click="openCredit(u)">+ Créditer</button>
+                                <button class="btn-danger" @click="openDebit(u)">- Débiter</button>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+                <p v-else style="color:#64748b">Aucun user pour l'instant.</p>
+            </div>
+
+            <!-- MODAL CREDIT / DEBIT -->
+            <div v-if="modal.open" class="card" style="border:2px solid var(--accent)">
+                <h3 style="margin-top:0">
+                    {{ modal.type === 'credit' ? 'Créditer' : 'Débiter' }} {{ modal.user.username }}
+                </h3>
+                <p style="color:#64748b">
+                    Solde actuel : <b>{{ modal.user.balance_camp }} CAMP</b>
+                </p>
+                <div class="row">
+                    <input v-model.number="modal.amount" type="number" min="1" placeholder="Montant CAMP" />
+                    <input v-model="modal.note" type="text" placeholder="Note (optionnel)" />
+                    <button @click="doTransfer" :disabled="processing || !modal.amount">
+                        {{ processing ? 'Envoi...' : 'Confirmer' }}
+                    </button>
+                    <button class="btn-secondary" @click="closeModal" :disabled="processing">Annuler</button>
+                </div>
+            </div>
+
+            <!-- MESSAGES -->
+            <div v-if="error" class="error">{{ error }}</div>
+            <div v-if="successMsg" class="success">
+                {{ successMsg }}
+                <div v-if="lastTxHash" style="margin-top:.4em; font-size:.85em">
+                    <a :href="'https://sepolia.basescan.org/tx/' + lastTxHash" target="_blank">
+                        Voir la tx sur BaseScan &rarr;
+                    </a>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        const API = "http://localhost:8000";
+        const { createApp, reactive, ref, computed, onMounted } = Vue;
+
+        createApp({
+            setup() {
+                const token = ref(localStorage.getItem("admin_token") || "");
+                const loginPwd = ref("");
+                const loading = ref(false);
+                const refreshing = ref(false);
+                const creating = ref(false);
+                const processing = ref(false);
+                const error = ref("");
+                const successMsg = ref("");
+                const lastTxHash = ref("");
+
+                const treasury = ref({ address: "", balance_camp: 0, balance_eth: 0 });
+                const users = ref([]);
+                const newUser = reactive({ username: "", user_password: "", initial_camp: 0 });
+                const modal = reactive({ open: false, type: "", user: null, amount: 0, note: "" });
+
+                const canCreate = computed(() =>
+                    newUser.username && newUser.user_password && newUser.initial_camp >= 0
+                );
+
+                const headers = () => ({
+                    "Authorization": `Bearer ${token.value}`,
+                    "Content-Type": "application/json",
+                });
+
+                async function api(path, opts = {}) {
+                    const r = await fetch(`${API}${path}`, {
+                        ...opts,
+                        headers: { ...headers(), ...(opts.headers || {}) },
+                    });
+                    if (!r.ok) {
+                        const body = await r.json().catch(() => ({}));
+                        throw new Error(body.detail || `HTTP ${r.status}`);
+                    }
+                    return r.json();
+                }
+
+                async function doLogin() {
+                    error.value = "";
+                    loading.value = true;
+                    try {
+                        const d = await api("/admin/login", {
+                            method: "POST",
+                            body: JSON.stringify({ password: loginPwd.value }),
+                        });
+                        token.value = d.token;
+                        localStorage.setItem("admin_token", d.token);
+                        loginPwd.value = "";
+                        await refresh();
+                    } catch (e) {
+                        error.value = e.message;
+                    } finally {
+                        loading.value = false;
+                    }
+                }
+
+                async function refresh() {
+                    refreshing.value = true;
+                    error.value = "";
+                    try {
+                        [treasury.value, users.value] = await Promise.all([
+                            api("/admin/treasury"),
+                            api("/admin/users"),
+                        ]);
+                    } catch (e) {
+                        console.error(e);
+                        if (e.message.includes("401") || e.message.includes("Token")) {
+                            logout();
+                        } else {
+                            error.value = e.message;
+                        }
+                    } finally {
+                        refreshing.value = false;
+                    }
+                }
+
+                async function createUser() {
+                    error.value = ""; successMsg.value = ""; lastTxHash.value = "";
+                    creating.value = true;
+                    try {
+                        const d = await api("/admin/users", {
+                            method: "POST",
+                            body: JSON.stringify(newUser),
+                        });
+                        successMsg.value = `User "${d.username}" créé ! Adresse : ${d.address}`;
+                        lastTxHash.value = d.camp_tx || d.eth_tx;
+                        newUser.username = "";
+                        newUser.user_password = "";
+                        newUser.initial_camp = 0;
+                        await refresh();
+                    } catch (e) {
+                        error.value = e.message;
+                    } finally {
+                        creating.value = false;
+                    }
+                }
+
+                function openCredit(u) {
+                    modal.open = true;
+                    modal.type = "credit";
+                    modal.user = u;
+                    modal.amount = 0;
+                    modal.note = "";
+                }
+
+                function openDebit(u) {
+                    modal.open = true;
+                    modal.type = "debit";
+                    modal.user = u;
+                    modal.amount = 0;
+                    modal.note = "";
+                }
+
+                function closeModal() {
+                    modal.open = false;
+                    modal.user = null;
+                }
+
+                async function doTransfer() {
+                    error.value = ""; successMsg.value = ""; lastTxHash.value = "";
+                    processing.value = true;
+                    try {
+                        const path = modal.type === "credit" ? "/admin/credit" : "/admin/debit";
+                        const d = await api(path, {
+                            method: "POST",
+                            body: JSON.stringify({
+                                username: modal.user.username,
+                                amount: modal.amount,
+                                note: modal.note,
+                            }),
+                        });
+                        const verb = modal.type === "credit" ? "crédité" : "débité";
+                        successMsg.value = `${modal.user.username} ${verb} de ${modal.amount} CAMP (nouveau solde : ${d.new_balance_camp})`;
+                        lastTxHash.value = d.tx_hash;
+                        closeModal();
+                        await refresh();
+                    } catch (e) {
+                        error.value = e.message;
+                    } finally {
+                        processing.value = false;
+                    }
+                }
+
+                function logout() {
+                    token.value = "";
+                    localStorage.removeItem("admin_token");
+                    users.value = [];
+                    treasury.value = { address: "", balance_camp: 0, balance_eth: 0 };
+                }
+
+                function shortAddr(a) {
+                    return a ? a.slice(0, 6) + "…" + a.slice(-4) : "";
+                }
+
+                function formatNum(n) {
+                    return (n ?? 0).toLocaleString("fr-FR");
+                }
+
+                onMounted(() => { if (token.value) refresh(); });
+
+                return {
+                    token, loginPwd, treasury, users, newUser, modal,
+                    loading, refreshing, creating, processing,
+                    error, successMsg, lastTxHash, canCreate,
+                    doLogin, refresh, createUser, openCredit, openDebit,
+                    closeModal, doTransfer, logout, shortAddr, formatNum,
+                };
+            }
+        }).mount("#app");
+    </script>
+</body>
+
+</html>

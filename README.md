@@ -1,38 +1,75 @@
-# CamplongCoin — MVP Setup
+# CamplongCoin
 
-App custodial minimaliste pour échanger un token ERC-20 (CAMP) entre potes sur **Base Sepolia** (testnet, gratuit).
+App custodial pour échanger un token ERC-20 (**CAMP**) entre potes sur **Base Sepolia** (testnet Ethereum L2, gratuit).
+
+L'app gère le wallet de chacun en backend (clés privées chiffrées), un backoffice admin permet de créer des users et distribuer/récupérer des CAMP depuis ton portefeuille perso (treasury), et tout passe par de vraies transactions on-chain visibles sur BaseScan.
+
+---
+
+## Table des matières
+
+1. [Stack](#stack)
+2. [Structure du projet](#structure-du-projet)
+3. [Setup initial : déployer le contrat + lancer l'app](#setup-initial)
+4. [Backoffice admin](#backoffice-admin)
+5. [Comment ça marche](#comment-ça-marche)
+6. [Sécurité](#sécurité)
+7. [API reference](#api-reference)
+8. [Pièges courants](#pièges-courants)
+9. [Pour aller plus loin](#pour-aller-plus-loin)
+
+---
 
 ## Stack
 
-- **Smart contract** : Solidity 0.8.20 + OpenZeppelin ERC20
-- **Réseau** : Base Sepolia (Chain ID 84532)
-- **Backend** : FastAPI + `web3.py` + `eth-account` + JWT
-- **Frontend** : Vue 3 (single HTML file)
-- **Storage** : `users.json` chiffré localement
+| Couche | Techno |
+|---|---|
+| Smart contract | Solidity 0.8.20 + OpenZeppelin ERC20 |
+| Réseau | Base Sepolia (Chain ID 84532) — L2 d'Ethereum, testnet |
+| Backend | FastAPI + `web3.py` + `eth-account` + JWT |
+| DB | PostgreSQL (Scaleway Serverless), 2 schémas `test` + `prod` |
+| Frontend | Vue 3 (single HTML file, x2 : user et admin) |
+| Crypto | Fernet pour chiffrer les clés privées, bcrypt pour les mots de passe |
+
+---
 
 ## Structure du projet
 
 ```
 camplong-coin/
-├── README.md
-├── .gitignore
+├── README.md                       # Ce fichier
+├── .gitignore                      # Protège .env, users.json, transactions.log
+│
 ├── contract/
-│   └── CamplongCoin.sol         # Smart contract ERC-20
+│   └── CamplongCoin.sol            # Smart contract ERC-20
+│
 ├── backend/
-│   ├── main.py                  # API FastAPI
-│   ├── setup_users.py           # Génère les wallets users
-│   ├── requirements.txt
-│   ├── .env.example             # Template du .env
-│   ├── .env                     # (créé manuellement, NON commit)
-│   ├── users.json               # (généré par setup_users, NON commit)
-│   └── transactions.log         # (créé au runtime, NON commit)
+│   ├── .env.example                # Template .env (à copier en .env)
+│   ├── .env                        # 🔒 secrets, NON commit
+│   ├── requirements.txt            # Deps Python
+│   │
+│   ├── database.py                 # Connection Postgres + schema switch
+│   ├── models.py                   # Modèles SQLAlchemy : User, Transaction, Nonce
+│   │
+│   ├── init_db.py                  # Crée les 2 schémas + les tables
+│   ├── migrate_from_json.py        # One-shot : users.json + transactions.log → DB
+│   ├── setup_users.py              # Génère des users en CLI (alternative au backoffice)
+│   │
+│   ├── main.py                     # FastAPI app, endpoints users
+│   └── admin.py                    # Router FastAPI, endpoints /admin/*
+│
 └── frontend/
-    └── index.html               # UI Vue 3
+    ├── index.html                  # UI user (login, balance, transfer)
+    └── admin.html                  # UI admin (backoffice)
 ```
 
 ---
 
-## Étape 1 — MetaMask + Base Sepolia
+## Setup initial
+
+L'objectif : avoir le contrat déployé, la DB prête, et 2 users qui peuvent s'envoyer des CAMP.
+
+### Étape 1 — MetaMask + Base Sepolia
 
 1. Installe **MetaMask** (extension Chrome/Brave/Firefox)
 2. Crée un wallet "Dev Hugo" — note la seed dans un gestionnaire de mots de passe. **Ce wallet sera ta treasury.**
@@ -40,16 +77,16 @@ camplong-coin/
    - Va sur https://chainlist.org/?testnets=true&search=base+sepolia → "Add to MetaMask"
    - Ou manuellement :
      - Nom : `Base Sepolia`
-     - RPC URL : `https://base-sepolia-rpc.publicnode.com` (plus stable que sepolia.base.org)
+     - RPC URL : `https://base-sepolia-rpc.publicnode.com` (plus stable que `sepolia.base.org`)
      - Chain ID : `84532`
      - Symbole : `ETH`
      - Explorer : `https://sepolia.basescan.org`
 
-## Étape 2 — Récupérer des ETH Sepolia (gratuit)
+### Étape 2 — Récupérer des ETH Sepolia (gratuit)
 
-Tu en as besoin pour : déployer le contrat + funder les wallets users.
+Tu en as besoin pour : déployer le contrat + funder la treasury et les users.
 
-Faucets recommandés (du plus simple au plus contraint) :
+Faucets (du plus simple au plus contraint) :
 - **Coinbase Developer Platform** : https://portal.cdp.coinbase.com/products/faucet (jusqu'à 0.1 ETH/24h, compte CDP gratuit)
 - **Chainstack** : 0.5 ETH/24h, inscription rapide
 - **PoW faucet** : https://www.ethereum-ecosystem.com/faucets/base-sepolia (zéro inscription, "minage" navigateur)
@@ -57,46 +94,58 @@ Faucets recommandés (du plus simple au plus contraint) :
 
 Demande **~0.1 ETH Sepolia** sur ton wallet "Dev Hugo". C'est largement suffisant.
 
-## Étape 3 — Déployer le contrat ERC-20
+### Étape 3 — Déployer le contrat ERC-20
 
 1. Va sur https://remix.ethereum.org
 2. Crée un fichier `CamplongCoin.sol` et colle le contenu de `contract/CamplongCoin.sol`
-3. Onglet **Solidity Compiler** : version `0.8.20+` → **Compile**
+3. Onglet **Solidity Compiler** → version `0.8.20+` → **Compile**
 4. Onglet **Deploy & Run Transactions** :
    - Environment : **Injected Provider - MetaMask** (vérifie que tu es sur Base Sepolia !)
    - Contract : `CamplongCoin`
    - Clique **Deploy** → signe la tx dans MetaMask
-5. **Copie l'adresse du contrat** (clique sur le contrat déployé en bas, icône copier). C'est ton `CONTRACT_ADDRESS`.
+5. **Copie l'adresse du contrat** (icône copier à côté du contrat déployé en bas). C'est ton `CONTRACT_ADDRESS`.
 
-À ce stade, ton wallet "Dev Hugo" possède **1 000 000 CAMP**. C'est la treasury.
+À ce stade, ton wallet "Dev Hugo" possède **1 000 000 CAMP**. Cette treasury sera utilisée par le backoffice pour distribuer des CAMP aux users.
 
-> 💡 Tu peux vérifier le contrat sur https://sepolia.basescan.org en collant son adresse.
+> 💡 Importer le token CAMP dans MetaMask pour le voir : MetaMask → onglet "Tokens" → "Import tokens" → "Custom token" → colle l'adresse du contrat → Import.
 
-## Étape 4 — Installer les dépendances backend
+### Étape 4 — Créer la DB Postgres (Scaleway Serverless)
+
+1. Console Scaleway → **Serverless → Serverless SQL Databases**
+2. Crée une database :
+   - Region : `fr-par`
+   - Engine : **PostgreSQL**
+   - Nom : `camplong`
+3. Onglet **Connect** : note **endpoint**, **database name**, **username**, **password**
+4. Forme finale du `DATABASE_URL` :
+
+   ```
+   postgresql://USER:PASSWORD@ENDPOINT/DBNAME?sslmode=require
+   ```
+
+> 💡 Scaleway Serverless SQL facture à l'usage, la DB se suspend après inactivité. Parfait pour un MVP.
+
+### Étape 5 — Installer les dépendances backend
 
 ```bash
 cd backend
 python3 -m venv .venv
-source .venv/bin/activate   # (sur macOS/Linux)
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Étape 5 — Générer les wallets users
+### Étape 6 — Récupérer la clé privée de ta treasury
 
-```bash
-cd backend
-python setup_users.py
-```
+⚠️ **Étape sensible**. Cette clé donne le contrôle total de la treasury.
 
-Le script va :
-1. **Afficher une MASTER_KEY** → garde-la sous le coude (à mettre dans `.env`)
-2. Te demander un mot de passe pour `Hugo` puis `Alice`
-3. Créer `users.json` avec les wallets chiffrés et les adresses générées
-4. **Afficher les 2 adresses Ethereum** des users → note-les
+Dans MetaMask :
+1. Clique sur les 3 points à côté de "Dev Hugo"
+2. **Account details** → **Show private key**
+3. Tape ton mot de passe MetaMask, copie la clé (format `0x...` 64 hex)
 
-> 💡 Pour ajouter d'autres potes plus tard : édite la liste `USERS_TO_CREATE` en haut de `setup_users.py` puis relance.
+Sur testnet : aucun risque financier (= 0€), mais **prends l'habitude d'être prudent** dès maintenant.
 
-## Étape 6 — Créer le fichier `.env`
+### Étape 7 — Créer le `.env`
 
 ```bash
 cd backend
@@ -106,129 +155,226 @@ cp .env.example .env
 Édite `.env` :
 
 ```env
-MASTER_KEY=<celle affichée par setup_users.py>
+# Secrets app
+MASTER_KEY=                            # généré à l'étape 8 ci-dessous
+JWT_SECRET=<openssl rand -hex 32>
+
+# Blockchain
 RPC_URL=https://base-sepolia-rpc.publicnode.com
 CONTRACT_ADDRESS=<adresse de l'étape 3>
-JWT_SECRET=<génère un secret avec: openssl rand -hex 32>
+
+# Database
+DATABASE_URL=postgresql://USER:PASS@HOST:PORT/DB?sslmode=require
+DB_SCHEMA=test
+
+# Backoffice
+TREASURY_PRIVATE_KEY=<clé de l'étape 6>
+ADMIN_PASSWORD=<openssl rand -hex 16>
 ```
 
-## Étape 7 — Funder les wallets users avec un peu d'ETH (pour le gas)
-
-Chaque user signe ses propres transactions, donc chaque wallet doit avoir un peu d'ETH pour payer le gas.
-
-Depuis MetaMask (wallet "Dev Hugo"), envoie **0.01 ETH Sepolia** à chaque adresse user (affichées à l'étape 5).
-
-> Sur Base Sepolia, une tx coûte ~0.000001 ETH → 0.01 ETH = des dizaines de milliers de transferts.
-
-## Étape 8 — Distribuer des CAMP initiaux aux users
-
-Depuis **Remix**, dans le contrat déployé (panneau "Deployed Contracts" en bas à gauche) :
-
-Pour donner **1000 CAMP** à Hugo :
-- Trouve la fonction `transfer`
-- `_to` : adresse de Hugo
-- `_value` : `1000000000000000000000` (= 1000 × 10¹⁸)
-- Clique sur **transact** → signe dans MetaMask
-
-Idem pour Alice (ou plus, ou moins, comme tu veux).
-
-> ⚠️ Les ERC-20 ont **18 décimales**. Donc 1 CAMP = `1000000000000000000` en interne. Toujours multiplier/diviser par `10**18`.
-
-Vérifie sur https://sepolia.basescan.org : colle l'adresse de Hugo → onglet "Token Holdings" → tu dois voir tes CAMP.
-
-## Étape 9 — Lancer le backend
+### Étape 8 — Initialiser la DB
 
 ```bash
-cd backend
-source .venv/bin/activate
+python init_db.py
+```
+
+Le script crée les 2 schémas (`test` et `prod`) et les tables `users`, `transactions`, `nonces` dans le schéma actif (`test` par défaut). Il affiche un diagnostic pour confirmer.
+
+> 💡 Pour initialiser aussi le schéma `prod` :
+> ```bash
+> DB_SCHEMA=prod python init_db.py
+> ```
+
+### Étape 9 — Générer la MASTER_KEY (si tu n'en as pas déjà une)
+
+```bash
+python setup_users.py
+```
+
+Au premier lancement (sans `MASTER_KEY` dans `.env`), le script affiche une clé fraîche. **Copie-la dans `.env`** sous `MASTER_KEY=` puis relance le script.
+
+> Le script `setup_users.py` est une **alternative CLI au backoffice** pour créer les premiers users. Tu peux aussi sauter cette étape et créer tes users directement via l'UI admin (étape 11).
+
+### Étape 10 — Lancer le backend
+
+```bash
 uvicorn main:app --reload
 ```
 
-Le backend tourne sur http://localhost:8000. Pour vérifier :
-- Ouvre http://localhost:8000/docs (Swagger auto-généré par FastAPI)
-- Ou http://localhost:8000/ → doit retourner `{"status": "ok", ...}`
+Vérifie http://localhost:8000/ → doit retourner :
+```json
+{"status":"ok","chain":"Base Sepolia","contract":"0x...","schema":"test"}
+```
 
-## Étape 10 — Lancer le frontend
+Doc auto-générée : http://localhost:8000/docs
 
-Le plus simple :
+### Étape 11 — Lancer le frontend
 
 ```bash
 cd frontend
 python3 -m http.server 8080
 ```
 
-Ouvre http://localhost:8080.
+- UI users : http://localhost:8080/index.html
+- UI admin : http://localhost:8080/admin.html
 
-## Étape 11 — Test end-to-end
+### Étape 12 — Test end-to-end
 
-1. **Login** en tant que `Hugo` avec le password choisi à l'étape 5 → tu vois ton solde (ex: 1000 CAMP)
-2. **Envoie 50 CAMP à Alice** avec note "test"
-3. Attends ~2-3s (confirmation Base Sepolia)
-4. Solde passe à 950, l'historique affiche la tx avec un lien BaseScan
-5. **Logout**, login en tant que `Alice` → solde reflète le transfert
+1. Ouvre le **backoffice** http://localhost:8080/admin.html
+2. Login avec ton `ADMIN_PASSWORD`
+3. Crée Hugo : pseudo `Hugo`, password au choix, **1000 CAMP initiaux**
+4. Crée Alice : pseudo `Alice`, password au choix, **1000 CAMP initiaux**
+5. Ouvre http://localhost:8080/index.html dans un autre onglet
+6. Login en tant que `Hugo` → tu vois 1000 CAMP
+7. Envoie 50 CAMP à Alice → ~3s, solde devient 950, historique affiche la tx avec lien BaseScan
+8. Logout, login en tant que `Alice` → tu vois 1050 CAMP
 
-🎉 Voilà, ta crypto fonctionne entre potes !
+🎉 Ton MVP est fonctionnel end-to-end.
 
 ---
 
-## Comment ça marche (résumé)
+## Backoffice admin
 
-### Flow d'un transfert
+UI admin pour gérer les users et déplacer des CAMP entre ta treasury et n'importe quel user. Accès via http://localhost:8080/admin.html avec `ADMIN_PASSWORD`.
+
+### Ce que tu peux faire
+
+| Action | Comment |
+|---|---|
+| Voir la treasury | Header noir en haut : adresse + solde CAMP + solde ETH (gas) |
+| Créer un user | Pseudo + password + montant CAMP initial → 1 clic |
+| Voir tous les users | Tableau avec soldes CAMP/ETH en temps réel |
+| Créditer (+) | Bouton vert : envoie CAMP depuis la treasury vers le user |
+| Débiter (−) | Bouton rouge : retire CAMP du user vers la treasury (possible car custodial) |
+
+### Détails techniques
+
+**Création de user** déclenche 3 opérations atomiques :
+1. Insert en DB (génère un wallet, chiffre la clé privée, hash le password)
+2. Tx ETH treasury → user (0.005 ETH automatique, pour qu'il puisse payer le gas plus tard)
+3. Si CAMP > 0 : tx CAMP treasury → user
+
+**Débit** : on déchiffre la clé privée du user et on signe une tx de lui vers la treasury. Si le user n'a plus assez d'ETH pour le gas, le backoffice lui en envoie d'abord automatiquement.
+
+**Logs d'audit** : chaque opération admin crée une ligne dans `transactions` avec `from_username` ou `to_username = "__treasury__"`. Tu retrouves tout l'historique admin dans la même table que les transferts normaux.
+
+---
+
+## Comment ça marche
+
+### Flow d'un transfert user
 
 ```
-[Vue]  user clique "Envoyer 50 à Alice"
+[Vue]  Hugo clique "Envoyer 50 à Alice"
    │
    ▼
 [FastAPI]  POST /transfer
    │
-   ├─ valider le JWT, retrouver le wallet de Hugo dans users.json
+   ├─ valider le JWT, retrouver le User de Hugo en DB
    ├─ déchiffrer la clé privée de Hugo avec MASTER_KEY (Fernet)
    ├─ vérifier le solde (balanceOf on-chain)
+   ├─ réserver un nonce en DB (SELECT FOR UPDATE)
    ├─ construire la tx : contract.transfer(addr_Alice, 50e18)
    ├─ signer avec la clé privée de Hugo
    ├─ envoyer via w3.eth.send_raw_transaction()
    ├─ attendre la confirmation (~2s sur Base)
-   ├─ logger dans transactions.log
+   ├─ enregistrer en table transactions
    │
    ▼
 [Réponse]  {tx_hash, new_balance}
-   │
-   ▼
-[Vue]  affiche succès + refresh balance + historique
 ```
 
-### Sécurité (niveau MVP)
+### Modèle de données (3 tables)
 
-| Aspect | Approche |
-|---|---|
-| Mots de passe | hashés bcrypt |
-| Clés privées | chiffrées Fernet, `MASTER_KEY` en env var |
-| Auth API | JWT HS256, expiration 7 jours |
-| Secrets | `.env` + `users.json` dans `.gitignore` |
-| HTTPS | À activer en prod (Scaleway le fait) |
+**users** : 1 ligne par user. `username` (pseudo) en PK, password hashé bcrypt, clé privée chiffrée Fernet, adresse Ethereum.
 
-**Ce qui n'est PAS dans le MVP** mais nécessaire avant mainnet : 2FA, secret manager pour la master key, audit du code de signing, monitoring de la treasury, multi-sig, rate limiting.
+**transactions** : log de toutes les tx CAMP qui passent par le backend (user→user, treasury→user, user→treasury). `tx_hash` unique.
+
+**nonces** : 1 ligne par adresse, avec le prochain nonce à utiliser. Verrouillée en `SELECT ... FOR UPDATE` pendant chaque transfert pour éviter les collisions en cas de tx concurrentes.
+
+### Schémas test et prod
+
+Une seule DB Scaleway, **deux schémas Postgres** :
+
+```
+camplong (DB)
+├── schema: test           ├── users
+│                          ├── transactions
+│                          └── nonces
+└── schema: prod           ├── users
+                           ├── transactions
+                           └── nonces
+```
+
+Tout le code est identique entre les deux. Seule la variable d'env `DB_SCHEMA` change. Les modèles déclarent leur schéma explicitement via `__table_args__ = {"schema": DB_SCHEMA}`, ce qui produit du SQL qualifié (`SELECT FROM test.users` au lieu de `SELECT FROM users`).
+
+> En prod tu utiliseras aussi : un autre `CONTRACT_ADDRESS` (Base mainnet ou autre testnet), une autre `MASTER_KEY`, un autre `JWT_SECRET`, un autre `TREASURY_PRIVATE_KEY`.
+
+### Gestion des nonces
+
+Le nonce Ethereum doit être strictement séquentiel. Si deux requêtes `/transfer` arrivent en concurrence, sans précaution les deux récupèrent le même nonce → l'une réussit, l'autre se prend `nonce too low`.
+
+Solution : `reserve_next_nonce()` dans `main.py` :
+1. `SELECT ... FOR UPDATE` sur la ligne du nonce → verrou pessimiste
+2. Compare avec `eth_getTransactionCount(addr, "pending")` pour resync si tx hors backend
+3. Prend `max(db, chain)`, incrémente, commit (libère le verrou)
+
+Garantie : deux requêtes parallèles ont des nonces strictement différents.
+
+---
+
+## API reference
+
+### Endpoints users (auth JWT user, 7 jours)
+
+| Méthode | Route | Description |
+|---|---|---|
+| `POST` | `/login` | Login user → `{token, address, username}` |
+| `GET` | `/me` | Infos du user connecté + solde CAMP |
+| `GET` | `/users` | Liste des autres users (pour le dropdown destinataire) |
+| `POST` | `/transfer` | Envoie CAMP du user connecté vers un autre user |
+| `GET` | `/history` | Historique des tx (100 dernières) |
+
+### Endpoints admin (auth JWT admin, 24h)
+
+| Méthode | Route | Description |
+|---|---|---|
+| `POST` | `/admin/login` | Login admin → `{token}` |
+| `GET` | `/admin/treasury` | Adresse + solde CAMP + solde ETH de la treasury |
+| `GET` | `/admin/users` | Liste de tous les users avec leurs soldes on-chain |
+| `POST` | `/admin/users` | Crée un user (génère wallet, fund ETH, fund CAMP optionnel) |
+| `POST` | `/admin/credit` | Envoie CAMP treasury → user |
+| `POST` | `/admin/debit` | Retire CAMP user → treasury |
+
+### Endpoint root
+
+| Méthode | Route | Description |
+|---|---|---|
+| `GET` | `/` | Healthcheck + infos de config (chain, contract, schema) |
+
+Doc interactive : http://localhost:8000/docs
+
 
 ---
 
 ## Pour aller plus loin
 
-- [ ] Migrer `users.json` + `transactions.log` vers Postgres (Scaleway Serverless)
-- [ ] Page "Exporter mon wallet" (affiche la clé privée déchiffrée, avec warning) pour passer en self-custody
-- [ ] Monitoring : alerte quand un wallet user descend sous 0.001 ETH
-- [ ] Déployer sur Scaleway Serverless Containers
-- [ ] Meta-transactions EIP-2771 : la treasury paie le gas pour les users
+### Évolutions courtes
 
----
+- [ ] Page "Exporter mon wallet" (affiche la clé privée déchiffrée avec warning) pour migrer en self-custody
+- [ ] Endpoint admin `/admin/fund-eth` pour refunder un user à court d'ETH (sans avoir à passer par MetaMask)
+- [ ] Monitoring : cron qui alerte si un wallet user descend sous 0.001 ETH
+- [ ] Backup chiffré régulier de la DB
+- [ ] Vérifier le contrat sur BaseScan pour qu'il soit lisible publiquement (Etherscan-style)
 
-## Pièges courants
+### Évolutions plus ambitieuses
 
-| Erreur | Cause / solution |
-|---|---|
-| `insufficient funds for gas` | Le wallet user n'a plus d'ETH Sepolia. Refunde depuis la treasury. |
-| `nonce too low` | Plusieurs tx rapprochées : utilise `get_transaction_count(addr, "pending")` |
-| Solde affiche 0 alors que tu viens d'envoyer | Pas attendu la confirmation. Refresh dans 2-3s. |
-| Faucet vide / rate-limited | Essaie un autre faucet (CDP, Chainstack, PoW) |
-| MetaMask : "wrong network" | Toujours vérifier qu'on est sur Base Sepolia avant Deploy/transfer dans Remix |
-| `Unable to connect` côté MetaMask | Change le RPC pour `https://base-sepolia-rpc.publicnode.com` |
-| `users.json` commité par erreur | Vérifier que `.gitignore` est en place **avant** le premier commit |
+- [ ] **Meta-transactions EIP-2771** : la treasury paie le gas pour les users. Plus besoin de funder chaque user en ETH. Surcoût : déployer un trusted forwarder + adapter le contrat.
+- [ ] **Auto-onboarding** : une page `/signup` publique avec captcha, l'admin valide a posteriori
+- [ ] **Notifications** : email ou push quand un user reçoit un transfert
+- [ ] **Déploiement Scaleway Serverless Containers** : `Dockerfile` + push image + DNS + HTTPS
+
+### Si ça décolle vraiment et que tu veux passer en mainnet
+
+Voir section [Sécurité — Avant de passer en mainnet](#avant-de-passer-en-mainnet). Surtout : multi-sig + hardware wallet + secret manager + audit du code.
+

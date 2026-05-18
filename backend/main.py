@@ -29,6 +29,7 @@ from dotenv import load_dotenv
 
 from database import get_db, DB_SCHEMA
 from models import User, Transaction, Nonce
+from admin import router as admin_router
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +69,10 @@ app.add_middleware(
 )
 
 oauth2 = OAuth2PasswordBearer(tokenUrl="login")
+
+
+# Monte les endpoints /admin/*
+app.include_router(admin_router)
 
 
 # ---------------------------------------------------------------------------
