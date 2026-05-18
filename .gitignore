@@ -1,0 +1,17 @@
+
+.env
+users.json
+transactions.log
+users.json.bak
+transactions.log.bak
+
+
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+
+
+.DS_Store
