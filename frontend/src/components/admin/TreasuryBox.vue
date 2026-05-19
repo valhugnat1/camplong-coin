@@ -12,13 +12,20 @@
     </div>
     <div class="stats">
       <div class="stat">
-        <div class="stat-label">CAMP</div>
+        <div class="stat-label">CAMP en treasury</div>
         <div class="stat-value mono">{{ formatNum(treasury.balance_camp) }}</div>
+        <div class="stat-sub mono">≈ {{ formatEur(campToEur(treasury.balance_camp)) }}</div>
       </div>
       <div class="stat">
         <div class="stat-label">ETH (gas)</div>
         <div class="stat-value mono">{{ (treasury.balance_eth ?? 0).toFixed(4) }}</div>
         <div v-if="lowGas" class="warn">⚠ Refund bientôt</div>
+        <div v-else class="stat-sub">ok</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">CAMP en circulation</div>
+        <div class="stat-value mono">{{ formatNum(circulating) }}</div>
+        <div class="stat-sub mono">≈ {{ formatEur(campToEur(circulating)) }}</div>
       </div>
     </div>
   </div>
@@ -26,17 +33,15 @@
 
 <script setup>
 import { computed } from 'vue'
+import { campToEur, formatEur, formatNum } from '@/config'
 
 const props = defineProps({
-  treasury: { type: Object, required: true }
+  treasury: { type: Object, required: true },
+  totalCircCamp: { type: Number, default: 0 }   // somme des CAMP des users
 })
 
 const lowGas = computed(() => (props.treasury.balance_eth ?? 0) < 0.01)
-
-function formatNum(n) {
-  if (n == null) return '0'
-  return Number(n).toLocaleString('fr-FR')
-}
+const circulating = computed(() => props.totalCircCamp)
 </script>
 
 <style scoped>
@@ -88,20 +93,37 @@ function formatNum(n) {
 }
 
 .stats {
-  display: flex;
-  gap: 2em;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1em;
+}
+@media (max-width: 720px) {
+  .stats { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 480px) {
+  .stats { grid-template-columns: 1fr; }
+}
+
+.stat {
+  padding: 0.6em 0.8em;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: var(--radius-sm);
 }
 .stat-label {
-  font-size: 0.78em;
+  font-size: 0.72em;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-2);
   font-weight: 600;
 }
 .stat-value {
-  font-size: 1.5em;
+  font-size: 1.4em;
   font-weight: 700;
+  margin-top: 0.15em;
+}
+.stat-sub {
+  color: var(--text-2);
+  font-size: 0.78em;
   margin-top: 0.15em;
 }
 .warn {

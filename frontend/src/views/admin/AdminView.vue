@@ -7,7 +7,7 @@
       <p class="page-sub">Crée, crédite, débite. Ton 1 000 000 CAMP n'attend que toi.</p>
     </div>
 
-    <TreasuryBox :treasury="treasury" />
+    <TreasuryBox :treasury="treasury" :total-circ-camp="totalCirc" />
 
     <CreateUserForm @created="loadAll" />
 
@@ -34,7 +34,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import AdminTopBar from '@/components/admin/AdminTopBar.vue'
 import TreasuryBox from '@/components/admin/TreasuryBox.vue'
@@ -52,6 +52,10 @@ const loadingUsers = ref(false)
 const globalSuccess = ref('')
 const globalTx = ref('')
 const globalError = ref('')
+
+const totalCirc = computed(() =>
+  users.value.reduce((s, u) => s + Number(u.balance_camp || 0), 0)
+)
 
 async function loadAll() {
   loadingUsers.value = true

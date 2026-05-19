@@ -2,9 +2,12 @@
   <div class="card">
     <div class="card-header">
       <div class="card-title">Users existants ({{ users.length }})</div>
-      <button class="btn-ghost btn-sm" @click="$emit('refresh')" :disabled="loading">
-        {{ loading ? '…' : '↻ Rafraîchir' }}
-      </button>
+      <div class="header-right">
+        <span class="hint mono">total: {{ formatNum(totalCamp) }} CAMP · {{ formatEur(campToEur(totalCamp)) }}</span>
+        <button class="btn-ghost btn-sm" @click="$emit('refresh')" :disabled="loading">
+          {{ loading ? '…' : '↻ Rafraîchir' }}
+        </button>
+      </div>
     </div>
 
     <div v-if="users.length === 0" class="empty-state">
@@ -19,6 +22,7 @@
             <th>Pseudo</th>
             <th>Adresse</th>
             <th style="text-align: right">CAMP</th>
+            <th style="text-align: right">Valeur (€)</th>
             <th></th>
           </tr>
         </thead>
@@ -31,6 +35,7 @@
               </a>
             </td>
             <td class="balance mono">{{ formatNum(u.balance_camp) }}</td>
+            <td class="balance-eur mono">{{ formatEur(campToEur(u.balance_camp)) }}</td>
             <td class="actions">
               <button class="btn-ghost btn-sm credit" @click="open('credit', u)">+ Créditer</button>
               <button class="btn-ghost btn-sm debit" @click="open('debit', u)">− Débiter</button>
@@ -40,23 +45,26 @@
       </table>
     </div>
 
-    <!-- Mobile cards (alternative à la table) -->
+    <!-- Mobile cards -->
     <div class="mobile-cards" v-if="users.length > 0">
       <div v-for="u in users" :key="'m-' + u.username" class="user-mini">
-        <div>
-          <div class="u-name">{{ u.username }}</div>
-          <div class="u-addr mono">
-            <a :href="'https://sepolia.basescan.org/address/' + u.address" target="_blank" rel="noreferrer">
-              {{ shortAddr(u.address) }}
-            </a>
+        <div class="user-mini-top">
+          <div>
+            <div class="u-name">{{ u.username }}</div>
+            <div class="u-addr mono">
+              <a :href="'https://sepolia.basescan.org/address/' + u.address" target="_blank" rel="noreferrer">
+                {{ shortAddr(u.address) }}
+              </a>
+            </div>
+          </div>
+          <div class="u-bal-wrap">
+            <div class="u-bal mono">{{ formatNum(u.balance_camp) }} CAMP</div>
+            <div class="u-bal-eur mono">{{ formatEur(campToEur(u.balance_camp)) }}</div>
           </div>
         </div>
-        <div>
-          <div class="u-bal mono">{{ formatNum(u.balance_camp) }} CAMP</div>
-          <div class="u-actions">
-            <button class="btn-ghost btn-sm credit" @click="open('credit', u)">+</button>
-            <button class="btn-ghost btn-sm debit" @click="open('debit', u)">−</button>
-          </div>
+        <div class="u-actions">
+          <button class="btn-ghost btn-sm credit" @click="open('credit', u)">+ Créditer</button>
+          <button class="btn-ghost btn-sm debit" @click="open('debit', u)">− Débiter</button>
         </div>
       </div>
     </div>
@@ -73,11 +81,15 @@
         </div>
         <p class="modal-current">
           Solde actuel : <b class="mono">{{ formatNum(modal.user.balance_camp) }} CAMP</b>
+          <span class="mono dim">· {{ formatEur(campToEur(modal.user.balance_camp)) }}</span>
         </p>
 
         <div class="field">
           <label class="field-label">Montant (CAMP)</label>
           <input v-model.number="modal.amount" type="number" min="1" placeholder="0" />
+          <div v-if="modal.amount" class="modal-eur mono">
+            ≈ {{ formatEur(campToEur(modal.amount)) }}
+          </div>
         </div>
         <div class="field">
           <label class="field-label">Note (optionnel)</label>
@@ -102,17 +114,22 @@
 </template>
 
 <script setup>
-import { reactive, ref } from 'vue'
+import { reactive, ref, computed } from 'vue'
 import { apiCall } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
+import { campToEur, formatEur, formatNum } from '@/config'
 
-defineProps({
+const props = defineProps({
   users: { type: Array, required: true },
   loading: { type: Boolean, default: false }
 })
 const emit = defineEmits(['refresh', 'tx-success'])
 
 const auth = useAuthStore()
+
+const totalCamp = computed(() =>
+  props.users.reduce((s, u) => s + Number(u.balance_camp || 0), 0)
+)
 
 const modal = reactive({ open: false, type: 'credit', user: {}, amount: 0, note: '' })
 const processing = ref(false)
@@ -162,13 +179,24 @@ async function confirm() {
 function shortAddr(a) {
   return a ? a.slice(0, 6) + '…' + a.slice(-4) : ''
 }
-function formatNum(n) {
-  if (n == null) return '0'
-  return Number(n).toLocaleString('fr-FR')
-}
 </script>
 
 <style scoped>
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.8em;
+  flex-wrap: wrap;
+}
+.hint {
+  color: var(--text-3);
+  font-size: 0.8em;
+}
+.dim {
+  color: var(--text-3);
+  margin-left: 0.4em;
+}
+
 .table-wrap {
   overflow-x: auto;
 }
@@ -193,6 +221,12 @@ th {
   text-align: right;
   font-weight: 700;
 }
+.balance-eur {
+  text-align: right;
+  color: var(--text-2);
+  font-size: 0.88em;
+  font-weight: 500;
+}
 
 .actions {
   text-align: right;
@@ -210,10 +244,9 @@ th {
   border-color: var(--red);
 }
 
-/* Mobile view : on cache la table, on affiche des mini-cards */
 .mobile-cards { display: none; }
 
-@media (max-width: 720px) {
+@media (max-width: 760px) {
   .table-wrap { display: none; }
   .mobile-cards {
     display: flex;
@@ -223,13 +256,17 @@ th {
 }
 
 .user-mini {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0.8em;
+  padding: 0.9em;
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+}
+.user-mini-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1em;
+  margin-bottom: 0.6em;
 }
 .u-name { font-weight: 600; }
 .u-addr {
@@ -238,14 +275,20 @@ th {
   margin-top: 0.15em;
 }
 .u-addr a { color: var(--text-2); }
+.u-bal-wrap {
+  text-align: right;
+}
 .u-bal {
   font-weight: 700;
-  text-align: right;
+}
+.u-bal-eur {
+  color: var(--text-2);
+  font-size: 0.82em;
+  margin-top: 0.15em;
 }
 .u-actions {
   display: flex;
-  gap: 0.3em;
-  margin-top: 0.4em;
+  gap: 0.4em;
   justify-content: flex-end;
 }
 
@@ -303,6 +346,13 @@ th {
   color: var(--text-2);
   font-size: 0.9em;
   margin-bottom: 1em;
+}
+
+.modal-eur {
+  margin-top: 0.4em;
+  color: var(--text-2);
+  font-size: 0.85em;
+  text-align: right;
 }
 
 .modal-actions {

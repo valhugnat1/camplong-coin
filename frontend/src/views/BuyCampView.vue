@@ -52,6 +52,19 @@
                 <span class="unit">CAMP</span>
               </div>
             </div>
+
+            <!-- Détail des frais (achat uniquement) -->
+            <details class="breakdown" open>
+              <summary>Détail du calcul</summary>
+              <div class="row"><span>Taux</span><span class="mono">1 € = 100 CAMP</span></div>
+              <div class="row"><span>Brut</span><span class="mono">{{ formatNum(grossBuy) }} CAMP</span></div>
+              <div class="row dim"><span>Frais achat ({{ feePctBuy }} %)</span><span class="mono">−{{ formatNum(feeBuyCamp) }} CAMP</span></div>
+              <div class="row total"><span>Net reçu</span><span class="mono">{{ formatNum(campOut) }} CAMP</span></div>
+              <p class="fee-note">
+                Les 5 % couvrent les serveurs et le gas Ethereum. La <b>vente est sans frais</b> :
+                la valeur en € affichée sur ton solde est exactement ce que tu récupères si tu revends.
+              </p>
+            </details>
           </template>
 
           <!-- SELL -->
@@ -76,30 +89,15 @@
               </div>
             </div>
 
+            <div class="no-fee-pill">
+              <span>✨</span> <b>Vente sans frais.</b>
+              Le prix affiché correspond pile à la valeur de ton solde.
+            </div>
+
             <div v-if="campInput > (wallet.me.balance || 0)" class="alert error" style="margin-top:.8em">
               Tu n'as pas assez de CAMP. Solde actuel : {{ formatNum(wallet.me.balance) }} CAMP.
             </div>
           </template>
-
-          <!-- Détail des frais -->
-          <details class="breakdown" open>
-            <summary>Détail du calcul</summary>
-            <div class="row"><span>Taux</span><span class="mono">1 CAMP = 0,01 €</span></div>
-            <div v-if="mode === 'buy'">
-              <div class="row"><span>Brut</span><span class="mono">{{ formatNum(grossBuy) }} CAMP</span></div>
-              <div class="row dim"><span>Frais ({{ feePct }} %)</span><span class="mono">−{{ formatNum(feeBuyCamp) }} CAMP</span></div>
-              <div class="row total"><span>Net</span><span class="mono">{{ formatNum(campOut) }} CAMP</span></div>
-            </div>
-            <div v-else>
-              <div class="row"><span>Brut</span><span class="mono">{{ formatEur(grossSellEur) }}</span></div>
-              <div class="row dim"><span>Frais ({{ feePct }} %)</span><span class="mono">−{{ formatEur(feeSellEur) }}</span></div>
-              <div class="row total"><span>Net</span><span class="mono">{{ formatEur(eurOut) }}</span></div>
-            </div>
-            <p class="fee-note">
-              Les 5 % couvrent les serveurs et le gas Ethereum (le contrat est sur Base Sepolia, gas testnet
-              mais infra réelle). C'est mon coût, pas mon profit. Promis-juré.
-            </p>
-          </details>
         </div>
 
         <!-- ─── PAYMENT INSTRUCTIONS ─── -->
@@ -174,7 +172,7 @@
               @click="sendSellRequest"
               :disabled="!canSell"
             >
-              📨 Envoyer la demande à Hugo
+              📨 Copier la demande pour Hugo
             </button>
 
             <div v-if="sellSent" class="alert success" style="margin-top:.8em">
@@ -203,18 +201,11 @@
 import { ref, computed, onMounted } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { useWalletStore } from '@/stores/wallet'
-import {
-  RATES,
-  PAYMENT,
-  formatEur,
-  formatNum,
-  eurToCampNet,
-  campToEurNet
-} from '@/config'
+import { RATES, PAYMENT, formatEur, formatNum } from '@/config'
 
 const wallet = useWalletStore()
 const payment = PAYMENT
-const feePct = RATES.feePct
+const feePctBuy = RATES.feePctBuy
 
 const mode = ref('buy')
 const eurInput = ref(10)
@@ -223,15 +214,13 @@ const sellHandle = ref('')
 const sellSent = ref(false)
 const copied = ref('')
 
-// ─── BUY calculations
+// ─── BUY (avec frais 5 %)
 const grossBuy = computed(() => Math.floor((eurInput.value || 0) * RATES.campPerEur))
-const feeBuyCamp = computed(() => Math.floor(grossBuy.value * (RATES.feePct / 100)))
+const feeBuyCamp = computed(() => Math.floor(grossBuy.value * (RATES.feePctBuy / 100)))
 const campOut = computed(() => Math.max(0, grossBuy.value - feeBuyCamp.value))
 
-// ─── SELL calculations
-const grossSellEur = computed(() => (campInput.value || 0) / RATES.campPerEur)
-const feeSellEur = computed(() => grossSellEur.value * (RATES.feePct / 100))
-const eurOut = computed(() => Math.max(0, grossSellEur.value - feeSellEur.value))
+// ─── SELL (sans frais, taux marché direct)
+const eurOut = computed(() => (campInput.value || 0) / RATES.campPerEur)
 
 const canSell = computed(
   () =>
@@ -291,9 +280,7 @@ onMounted(() => {
   gap: 0.4em;
   font-size: 0.92em;
 }
-.mode-toggle button:hover {
-  color: var(--text-0);
-}
+.mode-toggle button:hover { color: var(--text-0); }
 .mode-toggle button.active {
   background: var(--camp);
   color: white;
@@ -307,8 +294,6 @@ onMounted(() => {
 @media (max-width: 880px) {
   .grid { grid-template-columns: 1fr; }
 }
-
-/* ─── Form ─── */
 
 .amount-wrap {
   position: relative;
@@ -384,7 +369,19 @@ onMounted(() => {
   font-weight: 600;
 }
 
-/* ─── Breakdown ─── */
+.no-fee-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  padding: 0.7em 1em;
+  background: var(--green-soft);
+  border: 1px solid rgba(20, 224, 142, 0.25);
+  border-radius: var(--radius-sm);
+  color: #6bf2b7;
+  font-size: 0.88em;
+  margin-top: 0.6em;
+}
+.no-fee-pill b { color: var(--green); }
 
 .breakdown {
   margin-top: 0.6em;
@@ -428,8 +425,7 @@ onMounted(() => {
   font-style: italic;
   margin: 0.6em 0 0 0;
 }
-
-/* ─── Payment instructions ─── */
+.fee-note b { color: var(--text-1); font-style: normal; }
 
 .pay-card .explain {
   color: var(--text-1);
@@ -454,9 +450,6 @@ onMounted(() => {
   gap: 0.4em;
   font-weight: 600;
   font-size: 0.9em;
-}
-.pay-name .logo {
-  font-size: 1em;
 }
 .pay-name .tag {
   background: var(--green-soft);
