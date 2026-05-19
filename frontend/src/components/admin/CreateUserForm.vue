@@ -8,6 +8,7 @@
     <div class="form-row">
       <input v-model="form.username" placeholder="pseudo (ex: Charles)" />
       <input v-model="form.user_password" type="text" placeholder="mot de passe initial" />
+      <input v-model="form.email" type="email" placeholder="email (optionnel)" />
       <input v-model.number="form.initial_camp" type="number" min="0" placeholder="CAMP initial" />
       <button class="btn-primary" @click="submit" :disabled="creating || !canCreate">
         {{ creating ? 'Création…' : 'Créer' }}
@@ -16,6 +17,7 @@
 
     <p class="footer-hint">
       Plus besoin d'ETH côté user : la treasury paie tout le gas via <span class="mono">adminTransfer</span>.
+      L'email permet au user de recevoir les confirmations de demandes d'achat/vente.
     </p>
 
     <div v-if="success" class="alert success">
@@ -38,7 +40,7 @@ import { useAuthStore } from '@/stores/auth'
 const emit = defineEmits(['created'])
 const auth = useAuthStore()
 
-const form = reactive({ username: '', user_password: '', initial_camp: 0 })
+const form = reactive({ username: '', user_password: '', email: '', initial_camp: 0 })
 const creating = ref(false)
 const error = ref('')
 const success = ref('')
@@ -58,15 +60,18 @@ async function submit() {
   lastTx.value = ''
   creating.value = true
   try {
+    const payload = { ...form }
+    if (!payload.email) delete payload.email  // évite envoyer une string vide
     const d = await apiCall('/admin/users', {
       method: 'POST',
       token: auth.adminToken,
-      body: JSON.stringify(form)
+      body: JSON.stringify(payload)
     })
     success.value = `User « ${d.username} » créé. Adresse ${d.address}`
     lastTx.value = d.camp_tx
     form.username = ''
     form.user_password = ''
+    form.email = ''
     form.initial_camp = 0
     emit('created')
   } catch (e) {
@@ -85,15 +90,11 @@ async function submit() {
 
 .form-row {
   display: grid;
-  grid-template-columns: 1fr 1fr auto auto;
+  grid-template-columns: 1fr 1fr 1fr auto auto;
   gap: 0.6em;
 }
-.form-row input {
-  min-width: 0;
-}
-.form-row input[type=number] {
-  width: 140px;
-}
+.form-row input { min-width: 0; }
+.form-row input[type=number] { width: 140px; }
 
 .footer-hint {
   color: var(--text-3);
@@ -105,12 +106,11 @@ async function submit() {
   color: var(--text-1);
 }
 
-@media (max-width: 720px) {
-  .form-row {
-    grid-template-columns: 1fr;
-  }
-  .form-row input[type=number] {
-    width: 100%;
-  }
+@media (max-width: 920px) {
+  .form-row { grid-template-columns: 1fr 1fr; }
+  .form-row input[type=number] { width: 100%; }
+}
+@media (max-width: 540px) {
+  .form-row { grid-template-columns: 1fr; }
 }
 </style>

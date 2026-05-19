@@ -1,11 +1,25 @@
 <template>
-  <AdminTopBar />
+  <AdminTopBar :pending-count="ordersStore.pendingCount" />
   <main class="page fade-in">
 
     <div class="page-header">
       <h1 class="page-title">Backoffice CamplongCoin</h1>
       <p class="page-sub">Crée, crédite, débite. Ton 1 000 000 CAMP n'attend que toi.</p>
     </div>
+
+    <!-- Bandeau demandes en attente -->
+    <router-link
+      v-if="ordersStore.pendingCount > 0"
+      to="/admin/orders"
+      class="pending-banner"
+    >
+      <span class="dot"></span>
+      <span class="t">
+        <b>{{ ordersStore.pendingCount }} demande{{ ordersStore.pendingCount > 1 ? 's' : '' }} en attente</b>
+        — Hugo, t'as du taf.
+      </span>
+      <span class="arrow">→</span>
+    </router-link>
 
     <TreasuryBox :treasury="treasury" :total-circ-camp="totalCirc" />
 
@@ -35,16 +49,16 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
 import AdminTopBar from '@/components/admin/AdminTopBar.vue'
 import TreasuryBox from '@/components/admin/TreasuryBox.vue'
 import CreateUserForm from '@/components/admin/CreateUserForm.vue'
 import UsersTable from '@/components/admin/UsersTable.vue'
 import { apiCall } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
+import { useOrdersStore } from '@/stores/orders'
 
-const router = useRouter()
 const auth = useAuthStore()
+const ordersStore = useOrdersStore()
 
 const treasury = ref({ address: '', balance_camp: 0, balance_eth: 0 })
 const users = ref([])
@@ -67,13 +81,11 @@ async function loadAll() {
     ])
     treasury.value = t
     users.value = u
+    // En parallèle on charge aussi les orders pour le compteur (silencieux si erreur)
+    ordersStore.load('all').catch(() => {})
   } catch (e) {
-    if (/401|Token|invalid/i.test(String(e.message))) {
-      auth.logoutAdmin()
-      router.push({ name: 'admin-login' })
-    } else {
-      globalError.value = e.message
-    }
+    // Les 401 sont gérés globalement par apiCall (auto-logout + redirect).
+    globalError.value = e.message
   } finally {
     loadingUsers.value = false
   }
@@ -87,3 +99,38 @@ function onTxSuccess({ message, tx_hash }) {
 
 onMounted(loadAll)
 </script>
+
+<style scoped>
+.pending-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.7em;
+  padding: 0.9em 1.2em;
+  background: linear-gradient(135deg, rgba(255, 122, 0, 0.15), rgba(255, 122, 0, 0.05));
+  border: 1px solid rgba(255, 122, 0, 0.3);
+  border-radius: var(--radius);
+  margin-bottom: 1.25em;
+  text-decoration: none;
+  color: var(--text-0);
+  transition: transform 0.15s, border-color 0.15s;
+}
+.pending-banner:hover {
+  border-color: var(--camp);
+  text-decoration: none;
+  transform: translateX(2px);
+}
+.pending-banner .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--camp);
+  box-shadow: 0 0 10px var(--camp);
+  animation: pulse 1.4s infinite;
+}
+.pending-banner .t { flex: 1; }
+.pending-banner .t b { color: var(--camp); }
+.pending-banner .arrow {
+  font-size: 1.2em;
+  color: var(--camp);
+}
+</style>

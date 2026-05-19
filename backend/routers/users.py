@@ -1,18 +1,24 @@
 import datetime
 import bcrypt
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from jose import jwt
 
-from database import get_db, DB_SCHEMA
-from models import User, Transaction
-from schemas import LoginIn, TransferIn
-from security import current_user
-from blockchain import admin_transfer, get_balance_camp, treasury, reserve_next_nonce
+from database import get_db
+from models import User, Transaction, MarketOrder
+from schemas import (
+    LoginIn, TransferIn,
+    ChangePasswordIn, RevealKeyIn, UpdateEmailIn, CreateOrderIn,
+)
+from security import current_user, fernet
+from blockchain import admin_transfer, get_balance_camp, treasury
+from email_service import send_admin_new_order
 from config import JWT_SECRET
 
 router = APIRouter(tags=["users"])
+
+# ─── Auth ──────────────────────────────────────────────
 
 @router.post("/login")
 def login(body: LoginIn, db: Session = Depends(get_db)):
@@ -23,14 +29,69 @@ def login(body: LoginIn, db: Session = Depends(get_db)):
     token = jwt.encode({"sub": u.username, "exp": exp}, JWT_SECRET, algorithm="HS256")
     return {"token": token, "address": u.address, "username": u.username}
 
+
+# ─── Profil ────────────────────────────────────────────
+
 @router.get("/me")
 def me(user: User = Depends(current_user)):
     return {
         "username": user.username,
         "address": user.address,
+        "email": user.email,
         "balance": get_balance_camp(user.address),
     }
 
+
+@router.post("/me/password")
+def change_password(
+    body: ChangePasswordIn,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    """Change le mot de passe. Verifie l'ancien d'abord."""
+    if not bcrypt.checkpw(body.current_password.encode(), user.password_hash.encode()):
+        raise HTTPException(401, "Mot de passe actuel incorrect")
+    user.password_hash = bcrypt.hashpw(
+        body.new_password.encode(), bcrypt.gensalt()
+    ).decode()
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/me/email")
+def update_email(
+    body: UpdateEmailIn,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    """Met a jour l'email du user (pour recevoir les confirmations de demande)."""
+    user.email = body.email
+    db.commit()
+    return {"ok": True, "email": user.email}
+
+
+@router.post("/me/reveal-key")
+def reveal_key(
+    body: RevealKeyIn,
+    user: User = Depends(current_user),
+):
+    """
+    Renvoie la cle privee dechiffree pour permettre au user d'importer son
+    wallet dans MetaMask. Requiert le mot de passe en plus du JWT (double verif).
+    """
+    if not bcrypt.checkpw(body.password.encode(), user.password_hash.encode()):
+        raise HTTPException(401, "Mot de passe incorrect")
+    try:
+        private_key = fernet.decrypt(user.encrypted_private_key.encode()).decode()
+    except Exception:
+        raise HTTPException(500, "Impossible de dechiffrer la cle (MASTER_KEY ?)")
+    # Format 0x... attendu par MetaMask
+    if not private_key.startswith("0x"):
+        private_key = "0x" + private_key
+    return {"private_key": private_key}
+
+
+# ─── Annuaire ──────────────────────────────────────────
 
 @router.get("/users")
 def list_users(user: User = Depends(current_user), db: Session = Depends(get_db)):
@@ -38,13 +99,14 @@ def list_users(user: User = Depends(current_user), db: Session = Depends(get_db)
     return [{"username": u.username} for u in others]
 
 
+# ─── Transferts entre users ────────────────────────────
+
 @router.post("/transfer")
 def transfer(
     body: TransferIn,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    # 1. Validation
     dest = db.get(User, body.to_username)
     if not dest:
         raise HTTPException(404, "Destinataire inconnu")
@@ -55,11 +117,8 @@ def transfer(
     if body.amount > current_balance:
         raise HTTPException(400, f"Solde insuffisant ({current_balance} CAMP)")
 
-    # 2 & 3. Appel à la blockchain via notre fonction helper !
-    # Plus besoin de w3, contract, gas, reserve_next_nonce ici.
     tx_hash = admin_transfer(db, user.address, dest.address, body.amount)
 
-    # 4. Log DB
     db.add(Transaction(
         ts=datetime.datetime.utcnow(),
         from_username=user.username,
@@ -75,9 +134,9 @@ def transfer(
         "new_balance": get_balance_camp(user.address),
     }
 
+
 @router.get("/history")
 def history(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    """Historique des tx ou le user est expediteur ou destinataire."""
     rows = (
         db.query(Transaction)
           .filter(or_(
@@ -99,3 +158,87 @@ def history(user: User = Depends(current_user), db: Session = Depends(get_db)):
         }
         for r in rows
     ]
+
+
+# ─── Market Orders (achat/vente CAMP avec Hugo) ────────
+
+def _order_dict(o: MarketOrder) -> dict:
+    return {
+        "id": o.id,
+        "ts": o.ts.isoformat() + "Z" if o.ts else None,
+        "type": o.type,
+        "amount_camp": o.amount_camp,
+        "amount_eur": o.amount_eur,
+        "handle": o.handle or "",
+        "note": o.note or "",
+        "status": o.status,
+        "admin_note": o.admin_note or "",
+        "done_at": o.done_at.isoformat() + "Z" if o.done_at else None,
+    }
+
+
+@router.post("/orders")
+def create_order(
+    body: CreateOrderIn,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Cree une demande d'achat ou de vente. Statut initial : pending.
+    Envoie un email a l'admin en background.
+    """
+    if body.type == "sell":
+        if not body.handle.strip():
+            raise HTTPException(
+                400, "Pour vendre, indique ton handle Wero ou Revolut"
+            )
+        balance = get_balance_camp(user.address)
+        if body.amount_camp > balance:
+            raise HTTPException(400, f"Solde insuffisant ({balance} CAMP)")
+
+    order = MarketOrder(
+        username=user.username,
+        type=body.type,
+        amount_camp=body.amount_camp,
+        amount_eur=body.amount_eur,
+        handle=body.handle.strip(),
+        note=body.note,
+        status="pending",
+    )
+    db.add(order)
+    db.commit()
+    db.refresh(order)
+
+    # Notif admin en background (n'echoue jamais la requete)
+    background_tasks.add_task(
+        send_admin_new_order,
+        {
+            "id": order.id,
+            "ts": order.ts.isoformat() + "Z" if order.ts else "",
+            "username": user.username,
+            "type": order.type,
+            "amount_camp": order.amount_camp,
+            "amount_eur": order.amount_eur,
+            "handle": order.handle,
+            "note": order.note,
+        },
+        user.email,
+    )
+
+    return _order_dict(order)
+
+
+@router.get("/me/orders")
+def list_my_orders(
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    rows = (
+        db.query(MarketOrder)
+          .filter(MarketOrder.username == user.username)
+          .order_by(MarketOrder.ts.desc())
+          .limit(100)
+          .all()
+    )
+    return [_order_dict(r) for r in rows]

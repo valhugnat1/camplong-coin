@@ -1,12 +1,15 @@
-from pydantic import BaseModel, Field
+from typing import Literal, Optional
+from pydantic import BaseModel, EmailStr, Field
 
-# --- Admin ---
+# ─── Admin ─────────────────────────────────────────────
+
 class AdminLoginIn(BaseModel):
     password: str
 
 class CreateUserIn(BaseModel):
     username: str = Field(..., min_length=1, max_length=64)
     user_password: str = Field(..., min_length=1)
+    email: Optional[EmailStr] = None
     initial_camp: int = Field(0, ge=0)
 
 class AmountIn(BaseModel):
@@ -14,12 +17,35 @@ class AmountIn(BaseModel):
     amount: int = Field(..., gt=0)
     note: str = ""
 
-# --- Users ---
+class UpdateOrderIn(BaseModel):
+    """PATCH /admin/orders/{id} — l'admin peut mettre à jour le statut et/ou la note."""
+    status: Optional[Literal["pending", "done", "cancelled"]] = None
+    admin_note: Optional[str] = None
+
+# ─── Users ─────────────────────────────────────────────
+
 class LoginIn(BaseModel):
     username: str
     password: str
 
 class TransferIn(BaseModel):
     to_username: str
-    amount: int       # en CAMP entiers
+    amount: int                    # en CAMP entiers
+    note: str = ""
+
+class ChangePasswordIn(BaseModel):
+    current_password: str
+    new_password: str = Field(..., min_length=4)
+
+class RevealKeyIn(BaseModel):
+    password: str
+
+class UpdateEmailIn(BaseModel):
+    email: EmailStr
+
+class CreateOrderIn(BaseModel):
+    type: Literal["buy", "sell"]
+    amount_camp: int = Field(..., gt=0)
+    amount_eur: float = Field(..., gt=0)
+    handle: str = ""               # obligatoire pour 'sell' (validé côté route)
     note: str = ""

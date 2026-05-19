@@ -15,6 +15,10 @@
         <b>Ton 9-to-5 ne sait pas encore ce qui l'attend.</b>
       </p>
 
+      <div v-if="redirectInfo" class="alert info" style="font-size:0.88em">
+        ↩ Connexion requise pour accéder à <span class="mono">{{ redirectInfo }}</span>
+      </div>
+
       <div class="field">
         <label class="field-label">Pseudo</label>
         <input
@@ -51,19 +55,26 @@
 </template>
 
 <script setup>
-import { reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { reactive, ref, computed } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { apiCall } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 import { useWalletStore } from '@/stores/wallet'
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
 const wallet = useWalletStore()
 
 const form = reactive({ username: '', password: '' })
 const loading = ref(false)
 const error = ref('')
+
+// Si on a été renvoyé ici depuis une route protégée, on affiche un mini banner
+const redirectInfo = computed(() => {
+  const r = route.query.redirect
+  return r && r !== '/wallet' ? String(r) : ''
+})
 
 async function submit() {
   error.value = ''
@@ -75,7 +86,9 @@ async function submit() {
     })
     auth.setUserToken(d.token)
     await wallet.refresh()
-    router.push({ name: 'wallet' })
+    // Si on venait d'une route protégée, on y retourne ; sinon /wallet
+    const target = String(route.query.redirect || '/wallet')
+    router.push(target)
   } catch (e) {
     error.value = e.message
   } finally {
@@ -139,6 +152,10 @@ async function submit() {
 .login-sub b {
   color: var(--camp);
   font-weight: 600;
+}
+
+.mono {
+  font-family: 'JetBrains Mono', monospace;
 }
 
 .footer {

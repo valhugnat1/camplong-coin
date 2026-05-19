@@ -17,6 +17,13 @@
             <span class="v">{{ wallet.me.username }}</span>
           </div>
           <div class="info-row">
+            <span class="k">Email</span>
+            <span class="v">
+              <span v-if="wallet.me.email">{{ wallet.me.email }}</span>
+              <span v-else class="dim">— pas renseigné</span>
+            </span>
+          </div>
+          <div class="info-row">
             <span class="k">Solde</span>
             <span class="v mono">{{ formatNum(wallet.me.balance) }} CAMP</span>
           </div>
@@ -34,6 +41,35 @@
           </div>
         </div>
 
+        <!-- Email -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">📧 Mon email</div>
+          </div>
+          <p class="hint" style="margin-top:0">
+            Pour recevoir les confirmations quand Hugo traite tes achats/ventes.
+            On ne l'utilisera pas pour autre chose (pas de newsletter, juré).
+          </p>
+
+          <div class="field">
+            <label class="field-label">Email</label>
+            <input
+              v-model="emailForm.email"
+              type="email"
+              placeholder="toi@exemple.com"
+              autocomplete="email"
+              @keyup.enter="saveEmail"
+            />
+          </div>
+
+          <button class="btn-primary btn-block" @click="saveEmail" :disabled="savingEmail || !validEmail">
+            {{ savingEmail ? 'Enregistrement…' : (wallet.me.email ? 'Mettre à jour' : 'Enregistrer') }}
+          </button>
+
+          <div v-if="emailErr" class="alert error">{{ emailErr }}</div>
+          <div v-if="emailOk" class="alert success">{{ emailOk }}</div>
+        </div>
+
         <!-- Change password -->
         <div class="card">
           <div class="card-header">
@@ -42,38 +78,38 @@
 
           <div class="field">
             <label class="field-label">Mot de passe actuel</label>
-            <input v-model="form.current" type="password" autocomplete="current-password" />
+            <input v-model="pwdForm.current" type="password" autocomplete="current-password" />
           </div>
 
           <div class="field">
             <label class="field-label">Nouveau mot de passe</label>
-            <input v-model="form.next" type="password" autocomplete="new-password" />
+            <input v-model="pwdForm.next" type="password" autocomplete="new-password" />
           </div>
 
           <div class="field">
             <label class="field-label">Confirmer le nouveau mot de passe</label>
             <input
-              v-model="form.confirm"
+              v-model="pwdForm.confirm"
               type="password"
               autocomplete="new-password"
-              @keyup.enter="submit"
+              @keyup.enter="submitPwd"
             />
           </div>
 
-          <button class="btn-primary btn-block" @click="submit" :disabled="saving || !canSubmit">
-            {{ saving ? 'Modification…' : 'Mettre à jour' }}
+          <button class="btn-primary btn-block" @click="submitPwd" :disabled="savingPwd || !canSubmitPwd">
+            {{ savingPwd ? 'Modification…' : 'Mettre à jour' }}
           </button>
 
-          <div v-if="error" class="alert error">{{ error }}</div>
-          <div v-if="success" class="alert success">{{ success }}</div>
+          <div v-if="pwdErr" class="alert error">{{ pwdErr }}</div>
+          <div v-if="pwdOk" class="alert success">{{ pwdOk }}</div>
 
           <p class="hint">
-            Si tu changes ton mot de passe, tu seras déconnecté(e) automatiquement.
-            Note bien le nouveau, l'admin ne peut pas le récupérer (juste le reset).
+            Tu seras déconnecté(e) après le changement. Note bien le nouveau mot de passe :
+            l'admin peut le reset, pas le récupérer.
           </p>
         </div>
 
-        <!-- Danger zone (placeholder) -->
+        <!-- Danger zone -->
         <div class="card danger-zone">
           <div class="card-header">
             <div class="card-title">⚠ Zone rouge</div>
@@ -83,7 +119,8 @@
             <router-link to="/self-custody">Direction la page MetaMask →</router-link>
           </p>
           <p class="danger-text dim">
-            Suppression de compte : pas dispo. Si tu pars, demande à Hugo de te débiter tout ton solde, c'est l'équivalent.
+            Suppression de compte : seul l'admin peut le faire (et il faut d'abord vider ton solde).
+            Si tu veux partir, ping Hugo.
           </p>
         </div>
       </div>
@@ -92,7 +129,7 @@
 </template>
 
 <script setup>
-import { reactive, ref, computed, onMounted } from 'vue'
+import { reactive, ref, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import { apiCall } from '@/api/client'
@@ -104,59 +141,84 @@ const router = useRouter()
 const auth = useAuthStore()
 const wallet = useWalletStore()
 
-const form = reactive({ current: '', next: '', confirm: '' })
-const saving = ref(false)
-const error = ref('')
-const success = ref('')
+// ─── Email
+const emailForm = reactive({ email: '' })
+const savingEmail = ref(false)
+const emailErr = ref('')
+const emailOk = ref('')
+const validEmail = computed(() => /\S+@\S+\.\S+/.test(emailForm.email))
 
-const canSubmit = computed(
-  () => form.current && form.next && form.next === form.confirm && form.next.length >= 4
-)
+watch(() => wallet.me.email, (v) => {
+  emailForm.email = v || ''
+})
 
-function shortAddr(a) {
-  return a ? a.slice(0, 6) + '…' + a.slice(-4) : '—'
+async function saveEmail() {
+  emailErr.value = ''
+  emailOk.value = ''
+  savingEmail.value = true
+  try {
+    const d = await apiCall('/me/email', {
+      method: 'POST',
+      token: auth.userToken,
+      body: JSON.stringify({ email: emailForm.email })
+    })
+    wallet.me.email = d.email
+    emailOk.value = 'Email enregistré.'
+    setTimeout(() => (emailOk.value = ''), 3000)
+  } catch (e) {
+    emailErr.value = e.message
+  } finally {
+    savingEmail.value = false
+  }
 }
 
-async function submit() {
-  error.value = ''
-  success.value = ''
-  if (form.next !== form.confirm) {
-    error.value = 'Les deux nouveaux mots de passe ne correspondent pas.'
+// ─── Password
+const pwdForm = reactive({ current: '', next: '', confirm: '' })
+const savingPwd = ref(false)
+const pwdErr = ref('')
+const pwdOk = ref('')
+
+const canSubmitPwd = computed(
+  () => pwdForm.current && pwdForm.next && pwdForm.next === pwdForm.confirm && pwdForm.next.length >= 4
+)
+
+async function submitPwd() {
+  pwdErr.value = ''
+  pwdOk.value = ''
+  if (pwdForm.next !== pwdForm.confirm) {
+    pwdErr.value = 'Les deux nouveaux mots de passe ne correspondent pas.'
     return
   }
-  saving.value = true
+  savingPwd.value = true
   try {
-    // Endpoint à implémenter côté back : POST /me/password
-    // Payload : { current_password, new_password }
     await apiCall('/me/password', {
       method: 'POST',
       token: auth.userToken,
       body: JSON.stringify({
-        current_password: form.current,
-        new_password: form.next
+        current_password: pwdForm.current,
+        new_password: pwdForm.next
       })
     })
-    success.value = 'Mot de passe modifié. Tu vas être déconnecté(e)…'
+    pwdOk.value = 'Mot de passe modifié. Déconnexion…'
     setTimeout(() => {
       auth.logoutUser()
       wallet.reset()
       router.push({ name: 'login' })
     }, 1500)
   } catch (e) {
-    // Si endpoint pas encore implémenté
-    if (/404|Not Found/i.test(e.message)) {
-      error.value =
-        "L'endpoint /me/password n'existe pas encore côté back. À implémenter (POST avec { current_password, new_password })."
-    } else {
-      error.value = e.message
-    }
+    pwdErr.value = e.message
   } finally {
-    saving.value = false
+    savingPwd.value = false
   }
+}
+
+function shortAddr(a) {
+  return a ? a.slice(0, 6) + '…' + a.slice(-4) : '—'
 }
 
 onMounted(() => {
   if (!wallet.me.username) wallet.refresh()
+  else emailForm.email = wallet.me.email || ''
 })
 </script>
 
@@ -181,9 +243,7 @@ onMounted(() => {
   border-bottom: 1px solid var(--border);
   gap: 1em;
 }
-.info-row:last-child {
-  border-bottom: none;
-}
+.info-row:last-child { border-bottom: none; }
 .info-row .k {
   color: var(--text-2);
   font-size: 0.85em;
@@ -195,12 +255,9 @@ onMounted(() => {
   min-width: 0;
   word-break: break-all;
 }
-.info-row .v.small {
-  font-size: 0.78em;
-}
-.info-row .v a {
-  color: var(--text-0);
-}
+.info-row .v.small { font-size: 0.78em; }
+.info-row .v a { color: var(--text-0); }
+.dim { color: var(--text-3); font-style: italic; }
 
 .hint {
   color: var(--text-3);

@@ -2,7 +2,6 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { apiCall } from '@/api/client'
 import { useAuthStore } from './auth'
-import router from '@/router'
 
 export const useWalletStore = defineStore('wallet', () => {
   const me = ref({})
@@ -17,6 +16,8 @@ export const useWalletStore = defineStore('wallet', () => {
     loading.value = true
     lastError.value = ''
     try {
+      // Les 401 sont gérés globalement par apiCall (auto-logout + redirect).
+      // Ici on capture juste pour ne pas crasher la vue.
       const [m, u, h] = await Promise.all([
         apiCall('/me', { token: auth.userToken }),
         apiCall('/users', { token: auth.userToken }),
@@ -26,13 +27,7 @@ export const useWalletStore = defineStore('wallet', () => {
       users.value = u
       history.value = h
     } catch (e) {
-      if (/401|Token|invalid/i.test(String(e.message))) {
-        auth.logoutUser()
-        reset()
-        router.push({ name: 'login' })
-      } else {
-        lastError.value = e.message
-      }
+      lastError.value = e.message
     } finally {
       loading.value = false
     }

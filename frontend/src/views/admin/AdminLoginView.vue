@@ -12,6 +12,10 @@
       <h1 class="login-title">Accès restreint.</h1>
       <p class="login-sub">Tu es l'owner du contrat. Sois prudent.</p>
 
+      <div v-if="redirectInfo" class="alert info" style="font-size:0.88em">
+        ↩ Connexion admin requise pour accéder à <span class="mono">{{ redirectInfo }}</span>
+      </div>
+
       <div class="field">
         <label class="field-label">Mot de passe admin</label>
         <input
@@ -37,17 +41,23 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { apiCall } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
 
 const password = ref('')
 const loading = ref(false)
 const error = ref('')
+
+const redirectInfo = computed(() => {
+  const r = route.query.redirect
+  return r && r !== '/admin' ? String(r) : ''
+})
 
 async function submit() {
   error.value = ''
@@ -59,7 +69,8 @@ async function submit() {
     })
     auth.setAdminToken(d.token)
     password.value = ''
-    router.push({ name: 'admin' })
+    const target = String(route.query.redirect || '/admin')
+    router.push(target)
   } catch (e) {
     error.value = e.message
   } finally {
@@ -124,6 +135,10 @@ async function submit() {
   color: var(--text-2);
   font-size: 0.95em;
   margin-bottom: 2em;
+}
+
+.mono {
+  font-family: 'JetBrains Mono', monospace;
 }
 
 .footer {

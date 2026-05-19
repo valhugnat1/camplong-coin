@@ -21,7 +21,15 @@
           <span class="ico">👤</span>
           <div class="txt">
             <div class="t">Mon profil</div>
-            <div class="s">Changer mon mot de passe</div>
+            <div class="s">Email, mot de passe</div>
+          </div>
+        </button>
+
+        <button class="item" @click="go('/orders')">
+          <span class="ico">📋</span>
+          <div class="txt">
+            <div class="t">Mes demandes</div>
+            <div class="s">Historique des achats/ventes</div>
           </div>
         </button>
 
@@ -104,9 +112,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.profile-menu {
-  position: relative;
-}
+.profile-menu { position: relative; }
 
 .user-chip {
   display: flex;
@@ -119,14 +125,11 @@ onBeforeUnmount(() => {
   cursor: pointer;
   font-size: 0.9em;
   color: var(--text-1);
-  transition: border-color 0.15s, color 0.15s;
 }
-.user-chip:hover,
-.user-chip.active {
+.user-chip:hover, .user-chip.active {
   border-color: var(--border-strong);
   color: var(--text-0);
 }
-
 .avatar {
   width: 24px;
   height: 24px;
@@ -138,17 +141,12 @@ onBeforeUnmount(() => {
   font-weight: 700;
   font-size: 0.7em;
 }
-
 .caret {
   font-size: 0.7em;
   color: var(--text-2);
   transition: transform 0.2s;
 }
-.caret.open {
-  transform: rotate(180deg);
-}
-
-/* ─── Dropdown ─── */
+.caret.open { transform: rotate(180deg); }
 
 .dropdown {
   position: absolute;
@@ -160,38 +158,21 @@ onBeforeUnmount(() => {
   border-radius: var(--radius);
   padding: 0.5em;
   z-index: 100;
-  box-shadow: 0 12px 40px -8px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.02);
+  box-shadow: 0 12px 40px -8px rgba(0, 0, 0, 0.6);
 }
-
-.drop-enter-active,
-.drop-leave-active {
+.drop-enter-active, .drop-leave-active {
   transition: opacity 0.15s, transform 0.15s;
   transform-origin: top right;
 }
-.drop-enter-from,
-.drop-leave-to {
+.drop-enter-from, .drop-leave-to {
   opacity: 0;
   transform: scale(0.95) translateY(-4px);
 }
 
-.dropdown-header {
-  padding: 0.7em 0.8em 0.4em;
-}
-.username-big {
-  font-weight: 700;
-  font-size: 1em;
-}
-.addr {
-  font-size: 0.78em;
-  color: var(--text-2);
-  margin-top: 0.15em;
-}
-
-.divider {
-  height: 1px;
-  background: var(--border);
-  margin: 0.4em 0;
-}
+.dropdown-header { padding: 0.7em 0.8em 0.4em; }
+.username-big { font-weight: 700; font-size: 1em; }
+.addr { font-size: 0.78em; color: var(--text-2); margin-top: 0.15em; }
+.divider { height: 1px; background: var(--border); margin: 0.4em 0; }
 
 .item {
   display: flex;
@@ -206,45 +187,19 @@ onBeforeUnmount(() => {
   text-align: left;
   color: var(--text-0);
   font-size: 0.93em;
-  font-family: inherit;
   font-weight: 500;
   justify-content: flex-start;
 }
-.item:hover {
-  background: var(--bg-2);
-}
-.item .ico {
-  font-size: 1.2em;
-  line-height: 1;
-  flex-shrink: 0;
-  width: 1.5em;
-  text-align: center;
-}
-.item .txt {
-  flex: 1;
-  min-width: 0;
-}
-.item .t {
-  font-weight: 600;
-  line-height: 1.2;
-}
-.item .s {
-  font-size: 0.78em;
-  color: var(--text-2);
-  margin-top: 0.15em;
-  font-weight: 400;
-}
-.item.logout {
-  color: var(--red);
-}
-.item.logout:hover {
-  background: var(--red-soft);
-}
+.item:hover { background: var(--bg-2); }
+.item .ico { font-size: 1.2em; flex-shrink: 0; width: 1.5em; text-align: center; }
+.item .txt { flex: 1; min-width: 0; }
+.item .t { font-weight: 600; line-height: 1.2; }
+.item .s { font-size: 0.78em; color: var(--text-2); margin-top: 0.15em; font-weight: 400; }
+.item.logout { color: var(--red); }
+.item.logout:hover { background: var(--red-soft); }
 
 @media (max-width: 640px) {
   .username { display: none; }
-  .dropdown {
-    min-width: 260px;
-  }
+  .dropdown { min-width: 260px; }
 }
 </style>
