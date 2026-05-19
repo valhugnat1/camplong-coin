@@ -6,15 +6,9 @@ pour etre certain de toujours toucher le bon schema :
   1. SET search_path a chaque nouvelle connexion (pour les requetes textuelles)
   2. __table_args__ schema=DB_SCHEMA dans models.py (pour les requetes ORM)
 """
-import os
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, declarative_base
-from dotenv import load_dotenv
-
-load_dotenv()
-
-DATABASE_URL = os.environ["DATABASE_URL"]
-DB_SCHEMA = os.environ.get("DB_SCHEMA", "test")
+from config import DATABASE_URL, DB_SCHEMA
 
 if DB_SCHEMA not in ("test", "prod"):
     raise ValueError(f"DB_SCHEMA doit etre 'test' ou 'prod', recu : {DB_SCHEMA!r}")
