@@ -1,17 +1,23 @@
 """
-admin.py - Backoffice CamplongCoin
+admin.py - Backoffice CamplongCoin (v2 : treasury paie tout le gas)
+
+Le contrat expose maintenant adminTransfer(from, to, amount), reserve a
+l'owner du contrat (= treasury). Le backoffice signe TOUTES les transactions,
+donc :
+  - Les users n'ont jamais besoin d'ETH
+  - Plus de funding ETH a la creation d'un user
+  - Le debit n'a plus besoin de dechiffrer la cle privee du user
 
 Endpoints (tous prefixes /admin) :
-  POST /admin/login           -> {token}
-  GET  /admin/users           -> liste de tous les users avec leurs soldes
-  POST /admin/users           -> cree un nouveau user (genere wallet, fund ETH+CAMP)
-  POST /admin/credit          -> envoie CAMP depuis treasury vers un user
-  POST /admin/debit           -> retire CAMP d'un user vers treasury
-  GET  /admin/treasury        -> infos treasury (adresse, solde ETH, solde CAMP)
-
-Auth : un seul admin, mot de passe dans ADMIN_PASSWORD (.env).
+  POST /admin/login        -> {token}
+  GET  /admin/treasury     -> infos treasury (adresse, solde ETH, solde CAMP)
+  GET  /admin/users        -> liste de tous les users avec leur solde CAMP
+  POST /admin/users        -> cree un user (wallet + CAMP initiaux optionnels)
+  POST /admin/credit       -> envoie CAMP treasury -> user (adminTransfer)
+  POST /admin/debit        -> retire CAMP user -> treasury (adminTransfer)
 """
 import os
+import json
 import datetime
 from typing import Optional
 
@@ -29,33 +35,31 @@ from models import User, Transaction, Nonce
 
 
 # ---------------------------------------------------------------------------
-# Config (importee depuis main.py via les memes env vars)
+# Config
 # ---------------------------------------------------------------------------
 JWT_SECRET = os.environ["JWT_SECRET"]
 MASTER_KEY = os.environ["MASTER_KEY"].encode()
 RPC_URL = os.environ["RPC_URL"]
 CONTRACT_ADDRESS = Web3.to_checksum_address(os.environ["CONTRACT_ADDRESS"])
 
-# Specifique au backoffice
 TREASURY_PRIVATE_KEY = os.environ["TREASURY_PRIVATE_KEY"]
 ADMIN_PASSWORD = os.environ["ADMIN_PASSWORD"]
-CHAIN_ID = 84532
-
-# ETH a envoyer aux nouveaux users pour qu'ils puissent payer leur gas
-DEFAULT_ETH_FUND = 0.005   # ~5000 tx de transfer chacune sur Base Sepolia
+CHAIN_ID = 84532  # Base Sepolia
 
 w3 = Web3(Web3.HTTPProvider(RPC_URL))
 fernet = Fernet(MASTER_KEY)
 treasury = Account.from_key(TREASURY_PRIVATE_KEY)
 
-import json as _json
-ERC20_ABI = _json.loads("""[
+ERC20_ABI = json.loads("""[
   {"constant":true,"inputs":[{"name":"_owner","type":"address"}],
    "name":"balanceOf","outputs":[{"name":"balance","type":"uint256"}],"type":"function"},
   {"constant":false,"inputs":[{"name":"_to","type":"address"},{"name":"_value","type":"uint256"}],
    "name":"transfer","outputs":[{"name":"","type":"bool"}],"type":"function"},
-  {"constant":false,"inputs":[{"name":"_from","type":"address"},{"name":"_to","type":"address"},{"name":"_value","type":"uint256"}],
-   "name":"transferFrom","outputs":[{"name":"","type":"bool"}],"type":"function"}
+  {"constant":false,"inputs":[
+     {"name":"from","type":"address"},
+     {"name":"to","type":"address"},
+     {"name":"amount","type":"uint256"}],
+   "name":"adminTransfer","outputs":[],"type":"function"}
 ]""")
 contract = w3.eth.contract(address=CONTRACT_ADDRESS, abi=ERC20_ABI)
 
@@ -73,12 +77,12 @@ class AdminLoginIn(BaseModel):
 class CreateUserIn(BaseModel):
     username: str = Field(..., min_length=1, max_length=64)
     user_password: str = Field(..., min_length=1)
-    initial_camp: int = Field(0, ge=0)   # CAMP a envoyer immediatement (0 = aucun)
+    initial_camp: int = Field(0, ge=0)
 
 
 class AmountIn(BaseModel):
     username: str
-    amount: int = Field(..., gt=0)   # CAMP entiers
+    amount: int = Field(..., gt=0)
     note: str = ""
 
 
@@ -86,7 +90,6 @@ class AmountIn(BaseModel):
 # Auth admin
 # ---------------------------------------------------------------------------
 def require_admin(authorization: Optional[str] = Header(None)):
-    """Verifie qu'on a un JWT admin valide en header."""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Token manquant")
     token = authorization.split(" ", 1)[1]
@@ -100,12 +103,12 @@ def require_admin(authorization: Optional[str] = Header(None)):
 
 
 # ---------------------------------------------------------------------------
-# Helpers blockchain (treasury sign)
+# Helpers blockchain
 # ---------------------------------------------------------------------------
 def _next_treasury_nonce(db: Session) -> int:
     """
-    Pareil que pour les users : reserve_next_nonce avec verrou DB.
-    On reutilise la table 'nonces' pour la treasury aussi.
+    Reserve un nonce pour la treasury (verrou pessimiste sur la ligne DB).
+    Comme la treasury signe TOUT, c'est le seul nonce qu'on gere desormais.
     """
     row = (
         db.query(Nonce)
@@ -127,31 +130,17 @@ def _next_treasury_nonce(db: Session) -> int:
     return nonce_to_use
 
 
-def _send_eth_from_treasury(db: Session, to_addr: str, amount_eth: float) -> str:
-    """Envoie de l'ETH (gas) depuis la treasury. Retourne tx_hash."""
+def _admin_transfer(db: Session, from_addr: str, to_addr: str, amount_camp: int) -> str:
+    """
+    Treasury appelle adminTransfer(from, to, amount) sur le contrat.
+    Sert pour :
+      - credit (treasury -> user)
+      - debit  (user -> treasury)
+      - transfert user -> user (declenche depuis /transfer dans main.py)
+    """
     nonce = _next_treasury_nonce(db)
-    tx = {
-        "from": treasury.address,
-        "to": Web3.to_checksum_address(to_addr),
-        "value": w3.to_wei(amount_eth, "ether"),
-        "nonce": nonce,
-        "chainId": CHAIN_ID,
-        "gas": 21000,
-        "maxFeePerGas": w3.to_wei(0.1, "gwei"),
-        "maxPriorityFeePerGas": w3.to_wei(0.01, "gwei"),
-    }
-    signed = treasury.sign_transaction(tx)
-    tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction).hex()
-    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30)
-    if receipt.status != 1:
-        raise HTTPException(500, "Tx ETH (treasury->user) a echoue on-chain")
-    return tx_hash
-
-
-def _send_camp_from_treasury(db: Session, to_addr: str, amount_camp: int) -> str:
-    """Envoie des CAMP depuis la treasury. Retourne tx_hash."""
-    nonce = _next_treasury_nonce(db)
-    tx = contract.functions.transfer(
+    tx = contract.functions.adminTransfer(
+        Web3.to_checksum_address(from_addr),
         Web3.to_checksum_address(to_addr),
         amount_camp * 10**18,
     ).build_transaction({
@@ -166,58 +155,7 @@ def _send_camp_from_treasury(db: Session, to_addr: str, amount_camp: int) -> str
     tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction).hex()
     receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30)
     if receipt.status != 1:
-        raise HTTPException(500, "Tx CAMP (treasury->user) a echoue on-chain")
-    return tx_hash
-
-
-def _send_camp_from_user_to_treasury(db: Session, user: User, amount_camp: int) -> str:
-    """
-    Retire des CAMP du user vers la treasury (signe par le user).
-    On dechiffre la cle privee du user et on signe une tx transfer().
-    """
-    pk = fernet.decrypt(user.encrypted_private_key.encode()).decode()
-    user_acct = Account.from_key(pk)
-
-    # Verifier que le user a assez d'ETH pour payer le gas
-    # (sinon on lui en envoie un petit peu d'abord)
-    eth_balance = w3.eth.get_balance(user.address)
-    min_gas = w3.to_wei(0.0005, "ether")
-    if eth_balance < min_gas:
-        _send_eth_from_treasury(db, user.address, 0.005)
-
-    # Reserver un nonce user
-    row = (
-        db.query(Nonce)
-          .filter_by(address=user.address)
-          .with_for_update()
-          .first()
-    )
-    chain_nonce = w3.eth.get_transaction_count(user.address, "pending")
-    if row is None:
-        nonce = chain_nonce
-        db.add(Nonce(address=user.address, next_nonce=nonce + 1))
-        db.flush()
-    else:
-        nonce = max(row.next_nonce, chain_nonce)
-        row.next_nonce = nonce + 1
-    db.commit()
-
-    tx = contract.functions.transfer(
-        treasury.address,
-        amount_camp * 10**18,
-    ).build_transaction({
-        "from": user_acct.address,
-        "nonce": nonce,
-        "chainId": CHAIN_ID,
-        "gas": 100_000,
-        "maxFeePerGas": w3.to_wei(0.1, "gwei"),
-        "maxPriorityFeePerGas": w3.to_wei(0.01, "gwei"),
-    })
-    signed = user_acct.sign_transaction(tx)
-    tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction).hex()
-    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30)
-    if receipt.status != 1:
-        raise HTTPException(500, "Tx CAMP (user->treasury) a echoue on-chain")
+        raise HTTPException(500, "adminTransfer a echoue on-chain")
     return tx_hash
 
 
@@ -255,7 +193,7 @@ def get_treasury(_: bool = Depends(require_admin)):
 
 @router.get("/users")
 def list_all_users(_: bool = Depends(require_admin), db: Session = Depends(get_db)):
-    """Liste tous les users avec leurs soldes on-chain."""
+    """Liste tous les users avec leur solde CAMP on-chain."""
     rows = db.query(User).order_by(User.created_at).all()
     return [
         {
@@ -263,7 +201,6 @@ def list_all_users(_: bool = Depends(require_admin), db: Session = Depends(get_d
             "address": u.address,
             "created_at": u.created_at.isoformat() + "Z" if u.created_at else None,
             "balance_camp": _balance_camp(u.address),
-            "balance_eth": _balance_eth(u.address),
         }
         for u in rows
     ]
@@ -277,23 +214,20 @@ def create_user(
 ):
     """
     Cree un nouveau user :
-      1. Genere wallet + chiffre la cle privee
+      1. Genere wallet + chiffre la cle privee (gardee pour un eventuel
+         export self-custody plus tard, sinon jamais utilisee)
       2. Hash le password
       3. Insere en DB
-      4. Fund ETH (gas) depuis treasury
-      5. Si initial_camp > 0 : envoie aussi des CAMP depuis treasury
+      4. Si initial_camp > 0 : adminTransfer treasury -> user
+    Plus de funding ETH, le user n'en a pas besoin.
     """
     if db.get(User, body.username):
         raise HTTPException(400, f"Username '{body.username}' deja pris")
 
-    # 1. Wallet
     acct = Account.create()
     enc_pk = fernet.encrypt(acct.key.hex().encode()).decode()
-
-    # 2. Password
     pwd_hash = bcrypt.hashpw(body.user_password.encode(), bcrypt.gensalt()).decode()
 
-    # 3. DB
     new_user = User(
         username=body.username,
         password_hash=pwd_hash,
@@ -303,13 +237,12 @@ def create_user(
     db.add(new_user)
     db.commit()
 
-    # 4. Fund ETH (toujours, pour qu'il puisse payer son gas plus tard)
-    eth_tx = _send_eth_from_treasury(db, acct.address, DEFAULT_ETH_FUND)
-
-    # 5. Optionnel : envoyer des CAMP initiaux
     camp_tx = None
     if body.initial_camp > 0:
-        camp_tx = _send_camp_from_treasury(db, acct.address, body.initial_camp)
+        treasury_bal = _balance_camp(treasury.address)
+        if body.initial_camp > treasury_bal:
+            raise HTTPException(400, f"Treasury insuffisante ({treasury_bal} CAMP)")
+        camp_tx = _admin_transfer(db, treasury.address, acct.address, body.initial_camp)
         db.add(Transaction(
             ts=datetime.datetime.utcnow(),
             from_username="__treasury__",
@@ -323,7 +256,6 @@ def create_user(
     return {
         "username": body.username,
         "address": acct.address,
-        "eth_tx": eth_tx,
         "camp_tx": camp_tx,
         "initial_camp": body.initial_camp,
     }
@@ -344,7 +276,7 @@ def credit_user(
     if body.amount > treasury_bal:
         raise HTTPException(400, f"Treasury insuffisante ({treasury_bal} CAMP)")
 
-    tx_hash = _send_camp_from_treasury(db, user.address, body.amount)
+    tx_hash = _admin_transfer(db, treasury.address, user.address, body.amount)
 
     db.add(Transaction(
         ts=datetime.datetime.utcnow(),
@@ -371,7 +303,8 @@ def debit_user(
 ):
     """
     Retire {amount} CAMP du user vers la treasury.
-    Custodial = on a la cle privee du user, donc on peut signer pour lui.
+    Plus besoin de dechiffrer la cle privee du user : la treasury (= owner
+    du contrat) peut deplacer n'importe quel solde via adminTransfer.
     """
     user = db.get(User, body.username)
     if not user:
@@ -381,7 +314,7 @@ def debit_user(
     if body.amount > user_bal:
         raise HTTPException(400, f"User n'a que {user_bal} CAMP")
 
-    tx_hash = _send_camp_from_user_to_treasury(db, user, body.amount)
+    tx_hash = _admin_transfer(db, user.address, treasury.address, body.amount)
 
     db.add(Transaction(
         ts=datetime.datetime.utcnow(),

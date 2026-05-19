@@ -42,6 +42,8 @@ RPC_URL = os.environ["RPC_URL"]
 CONTRACT_ADDRESS = Web3.to_checksum_address(os.environ["CONTRACT_ADDRESS"])
 JWT_SECRET = os.environ["JWT_SECRET"]
 CHAIN_ID = 84532  # Base Sepolia
+TREASURY_PRIVATE_KEY = os.environ["TREASURY_PRIVATE_KEY"]
+treasury = Account.from_key(TREASURY_PRIVATE_KEY)
 
 fernet = Fernet(MASTER_KEY)
 w3 = Web3(Web3.HTTPProvider(RPC_URL))
@@ -50,7 +52,12 @@ ERC20_ABI = json.loads("""[
   {"constant":true,"inputs":[{"name":"_owner","type":"address"}],
    "name":"balanceOf","outputs":[{"name":"balance","type":"uint256"}],"type":"function"},
   {"constant":false,"inputs":[{"name":"_to","type":"address"},{"name":"_value","type":"uint256"}],
-   "name":"transfer","outputs":[{"name":"","type":"bool"}],"type":"function"}
+   "name":"transfer","outputs":[{"name":"","type":"bool"}],"type":"function"},
+  {"constant":false,"inputs":[
+     {"name":"from","type":"address"},
+     {"name":"to","type":"address"},
+     {"name":"amount","type":"uint256"}],
+   "name":"adminTransfer","outputs":[],"type":"function"}
 ]""")
 
 contract = w3.eth.contract(address=CONTRACT_ADDRESS, abi=ERC20_ABI)
@@ -204,33 +211,31 @@ def transfer(
     if body.amount > current_balance:
         raise HTTPException(400, f"Solde insuffisant ({current_balance} CAMP)")
 
-    # 2. Dechiffrer la cle privee
-    pk = fernet.decrypt(user.encrypted_private_key.encode()).decode()
-    acct = Account.from_key(pk)
-    to_addr = Web3.to_checksum_address(dest.address)
+    # 2. Reserver un nonce pour la TREASURY (plus pour le user)
+    nonce = reserve_next_nonce(db, treasury.address)
+
+    # 3. Construire la tx adminTransfer, signee par la treasury
     amount_wei = body.amount * 10**18
-
-    # 3. Reserver un nonce en DB (avec verrou)
-    nonce = reserve_next_nonce(db, user.address)
-
-    # 4. Construire, signer, envoyer
-    tx = contract.functions.transfer(to_addr, amount_wei).build_transaction({
-        "from": acct.address,
+    tx = contract.functions.adminTransfer(
+        user.address,
+        Web3.to_checksum_address(dest.address),
+        amount_wei,
+    ).build_transaction({
+        "from": treasury.address,
         "nonce": nonce,
         "chainId": CHAIN_ID,
         "gas": 100_000,
         "maxFeePerGas": w3.to_wei(0.1, "gwei"),
         "maxPriorityFeePerGas": w3.to_wei(0.01, "gwei"),
     })
-    signed = acct.sign_transaction(tx)
+    signed = treasury.sign_transaction(tx)
     tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction).hex()
 
-    # 5. Attendre la confirmation
     receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=30)
     if receipt.status != 1:
         raise HTTPException(500, "La tx a echoue on-chain")
 
-    # 6. Enregistrer la tx en DB
+    # 4. Log DB (inchange)
     db.add(Transaction(
         ts=datetime.datetime.utcnow(),
         from_username=user.username,
@@ -245,7 +250,6 @@ def transfer(
         "tx_hash": tx_hash,
         "new_balance": get_balance_camp(user.address),
     }
-
 
 @app.get("/history")
 def history(user: User = Depends(current_user), db: Session = Depends(get_db)):

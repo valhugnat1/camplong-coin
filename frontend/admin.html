@@ -261,7 +261,7 @@
                     </button>
                 </div>
                 <p style="color:#64748b; font-size:.85em; margin: .2em 0">
-                    Le user recevra automatiquement ~0.005 ETH (pour le gas) + les CAMP indiqués.
+                    Le user reçoit directement les CAMP indiqués. Plus besoin d'ETH : la treasury paie tout le gas.
                 </p>
             </div>
 
@@ -279,7 +279,6 @@
                             <th>Pseudo</th>
                             <th>Adresse</th>
                             <th>CAMP</th>
-                            <th>ETH</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
@@ -292,7 +291,6 @@
                                 </a>
                             </td>
                             <td class="balance">{{ formatNum(u.balance_camp) }}</td>
-                            <td>{{ u.balance_eth.toFixed(4) }}</td>
                             <td class="actions">
                                 <button class="btn-secondary" @click="openCredit(u)">+ Créditer</button>
                                 <button class="btn-danger" @click="openDebit(u)">- Débiter</button>
@@ -425,7 +423,7 @@
                             body: JSON.stringify(newUser),
                         });
                         successMsg.value = `User "${d.username}" créé ! Adresse : ${d.address}`;
-                        lastTxHash.value = d.camp_tx || d.eth_tx;
+                        lastTxHash.value = d.camp_tx;
                         newUser.username = "";
                         newUser.user_password = "";
                         newUser.initial_camp = 0;
