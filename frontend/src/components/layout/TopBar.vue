@@ -8,41 +8,23 @@
 
     <div class="spacer"></div>
 
-    <div v-if="wallet.me.username" class="balance-pill">
+    <div v-if="wallet.me.username" class="balance-pill" @click="$router.push('/buy')" title="Acheter / Vendre">
       <span class="dot"></span>
       <span class="amount mono">{{ formatNum(wallet.me.balance) }}</span>
       <span class="currency">CAMP</span>
+      <span class="eur mono">· {{ formatEur(campToEur(wallet.me.balance)) }}</span>
     </div>
 
-    <button class="user-chip" @click="logout" :title="'Logout ' + (wallet.me.username || '')">
-      <span class="username">{{ wallet.me.username || '—' }}</span>
-      <span class="avatar">{{ initial }}</span>
-    </button>
+    <ProfileMenu />
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
-import { useRouter } from 'vue-router'
-import { useAuthStore } from '@/stores/auth'
 import { useWalletStore } from '@/stores/wallet'
+import { campToEur, formatEur, formatNum } from '@/config'
+import ProfileMenu from './ProfileMenu.vue'
 
-const router = useRouter()
-const auth = useAuthStore()
 const wallet = useWalletStore()
-
-const initial = computed(() => (wallet.me.username || '?').slice(0, 1).toUpperCase())
-
-function formatNum(n) {
-  if (n == null) return '0'
-  return Number(n).toLocaleString('fr-FR')
-}
-
-function logout() {
-  auth.logoutUser()
-  wallet.reset()
-  router.push({ name: 'login' })
-}
 </script>
 
 <style scoped>
@@ -98,6 +80,12 @@ function logout() {
   border: 1px solid var(--border);
   border-radius: 999px;
   font-size: 0.92em;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.balance-pill:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-3);
 }
 .balance-pill .dot {
   width: 6px;
@@ -114,39 +102,15 @@ function logout() {
   color: var(--text-2);
   font-size: 0.85em;
 }
-
-.user-chip {
-  display: flex;
-  align-items: center;
-  gap: 0.5em;
-  padding: 0.4em 0.5em 0.4em 0.85em;
-  background: var(--bg-2);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  cursor: pointer;
-  font-size: 0.9em;
-  color: var(--text-1);
-}
-.user-chip:hover {
-  border-color: var(--border-strong);
-  color: var(--text-0);
-}
-.avatar {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, var(--violet), var(--camp));
-  display: grid;
-  place-items: center;
-  color: white;
-  font-weight: 700;
-  font-size: 0.7em;
+.balance-pill .eur {
+  color: var(--text-3);
+  font-size: 0.82em;
 }
 
 @media (max-width: 640px) {
   .topbar-inner { padding: 0.7em 1em; }
   .brand .logo-text { display: none; }
-  .balance-pill .currency { display: none; }
-  .username { display: none; }
+  .balance-pill .currency,
+  .balance-pill .eur { display: none; }
 }
 </style>

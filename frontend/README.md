@@ -12,114 +12,73 @@ Single repo pour le front user **et** le backoffice admin.
 - Single-file components, scoped CSS
 - Responsive (mobile-first), tout marche jusqu'à 360px
 
-## Structure
-
-```
-camplong-front/
-├── index.html              # entry point (charge les fonts)
-├── package.json
-├── vite.config.js          # alias @ = ./src
-├── .env.example            # VITE_API_URL
-│
-└── src/
-    ├── main.js
-    ├── App.vue             # shell minimal (router-view)
-    │
-    ├── api/
-    │   └── client.js       # wrapper fetch + gestion erreurs
-    │
-    ├── router/
-    │   └── index.js        # routes + guards (needsUser, needsAdmin)
-    │
-    ├── stores/
-    │   ├── auth.js         # JWT user + JWT admin, localStorage sync
-    │   └── wallet.js       # me, users, history (refresh centralisé)
-    │
-    ├── assets/styles/
-    │   └── main.css        # variables, primitives, atmosphère
-    │
-    ├── components/
-    │   ├── layout/
-    │   │   ├── AppLayout.vue   # topbar + ticker + tabs (user)
-    │   │   ├── TopBar.vue
-    │   │   ├── Ticker.vue
-    │   │   └── TabNav.vue
-    │   ├── wallet/
-    │   │   ├── BalanceCard.vue
-    │   │   ├── SendForm.vue
-    │   │   └── HistoryList.vue
-    │   └── admin/
-    │       ├── AdminTopBar.vue
-    │       ├── TreasuryBox.vue
-    │       ├── CreateUserForm.vue
-    │       └── UsersTable.vue   # + modal credit/debit
-    │
-    └── views/
-        ├── LoginView.vue
-        ├── WalletView.vue
-        ├── ParisView.vue    # placeholder (markets mockés)
-        ├── CasinoView.vue   # placeholder (jeux mockés)
-        ├── MilkView.vue     # placeholder (chart SVG + top movers)
-        └── admin/
-            ├── AdminLoginView.vue
-            └── AdminView.vue
-```
-
-## Init (à faire 1 fois)
+## Init
 
 ```bash
 cd camplong-front
 cp .env.example .env
-# édite .env si ton back tourne ailleurs que http://localhost:8000
+# édite .env : VITE_API_URL + VITE_CONTRACT_ADDRESS
 
 npm install
+npm run dev      # http://localhost:8080
 ```
 
-## Dev
-
-```bash
-npm run dev
-```
-
-- App user : <http://localhost:8080/login>
-- Backoffice : <http://localhost:8080/admin/login>
-
-Le dev server reload à chaud (HMR) à chaque modif.
-
-## Build prod
-
-```bash
-npm run build      # génère dist/
-npm run preview    # sert dist/ localement pour tester
-```
-
-`dist/` contient un SPA statique. Tu peux le servir avec n'importe quoi : nginx, Caddy, Scaleway Object Storage + CDN, Vercel, Netlify…
+Pour la prod : `npm run build` → `dist/` (statique, à servir avec nginx, Caddy, Object Storage…).
 
 ## Routes
 
-| Path           | Auth         | Vue                |
-|----------------|--------------|--------------------|
-| `/`            | redirect     | → `/wallet`        |
-| `/login`       | public       | LoginView          |
-| `/wallet`      | user JWT     | WalletView         |
-| `/paris`       | user JWT     | ParisView (mock)   |
-| `/casino`      | user JWT     | CasinoView (mock)  |
-| `/milk`        | user JWT     | MilkView (mock)    |
-| `/admin/login` | public       | AdminLoginView     |
-| `/admin`       | admin JWT    | AdminView          |
+| Path             | Auth         | Vue                  | Description                        |
+|------------------|--------------|----------------------|------------------------------------|
+| `/`              | redirect     | → `/wallet`          | Home                               |
+| `/login`         | public       | LoginView            |                                    |
+| `/wallet`        | user JWT     | WalletView           | Balance, envoi, historique         |
+| `/paris`         | user JWT     | ParisView            | Placeholder Polymarket-like        |
+| `/casino`        | user JWT     | CasinoView           | Placeholder slots/roulette         |
+| `/milk`          | user JWT     | MilkView             | Placeholder Bourse du Lait         |
+| `/profile`       | user JWT     | ProfileView          | Change mot de passe                |
+| `/self-custody`  | user JWT     | SelfCustodyView      | Export clé + ajout MetaMask        |
+| `/buy`           | user JWT     | BuyCampView          | Acheter / Vendre CAMP en EUR       |
+| `/admin/login`   | public       | AdminLoginView       |                                    |
+| `/admin`         | admin JWT    | AdminView            | Backoffice                         |
 
-Les routes `*` (404) redirigent vers `/wallet`.
+Routes inconnues → redirect `/wallet`.
+
+## Conversion EUR ↔ CAMP
+
+Centralisée dans `src/config.js`.
+
+- **Taux de base** : 1 € = 100 CAMP (1 CAMP = 0,01 €)
+- **Frais** : 5 % sur chaque opération (serveurs + gas Ethereum)
+- **Résultat pratique** : 10 € → 950 CAMP nets
+
+Pour changer le taux ou les frais : édite `RATES` dans `config.js`.
+
+## Handles de paiement (Hugo)
+
+Dans `src/config.js`, objet `PAYMENT` :
+
+```js
+export const PAYMENT = {
+  recipient: 'Hugo Philipp',
+  wero: '+33 6 XX XX XX XX',
+  revolut: '@hugophilipp'
+}
+```
+
+**⚠️ Pense à remplacer ces valeurs par tes vrais handles avant de partager le lien.**
 
 ## Endpoints back consommés
 
-User (token JWT user, header `Authorization: Bearer …`) :
+User (header `Authorization: Bearer <user_jwt>`) :
 - `POST /login`
 - `GET /me`
 - `GET /users`
 - `GET /history`
 - `POST /transfer`
+- `POST /me/password`     ← **À implémenter** (pour ProfileView)
+- `POST /me/reveal-key`   ← **À implémenter** (pour SelfCustodyView)
 
-Admin (token JWT admin) :
+Admin (header `Authorization: Bearer <admin_jwt>`) :
 - `POST /admin/login`
 - `GET /admin/treasury`
 - `GET /admin/users`
@@ -127,11 +86,78 @@ Admin (token JWT admin) :
 - `POST /admin/credit`
 - `POST /admin/debit`
 
-L'URL du back est lue dans `VITE_API_URL` (`.env`).
+### Spec des 2 nouveaux endpoints user
 
-## Branchement des features "soon"
+**`POST /me/password`**
+```json
+// Request
+{ "current_password": "...", "new_password": "..." }
+// Response: 204 No Content (ou {"ok": true})
+```
 
-Les vues `paris`, `casino`, `milk` ont des données statiques (dans `<script setup>`).
-Quand tu auras les endpoints back, remplace les `const markets = [...]`, `const games = [...]`, etc. par des `onMounted(async () => { ... = await apiCall(...) })`.
+**`POST /me/reveal-key`**
+```json
+// Request
+{ "password": "..." }
+// Response
+{ "private_key": "0x..." }
+```
+Le back doit re-vérifier le password, déchiffrer la clé Fernet, et la renvoyer. Le front ne stocke jamais la clé, il l'affiche juste à l'écran.
 
-Tu peux aussi extraire dans des stores Pinia (`stores/paris.js`, etc.) si tu veux partager l'état entre composants.
+## Structure
+
+```
+camplong-front/
+├── index.html              # entry point (charge les fonts)
+├── package.json
+├── vite.config.js          # alias @ = ./src
+├── .env.example
+│
+└── src/
+    ├── main.js
+    ├── App.vue
+    ├── config.js           # taux EUR↔CAMP, handles paiement, chain, token
+    │
+    ├── api/
+    │   └── client.js
+    │
+    ├── router/
+    │   └── index.js
+    │
+    ├── stores/
+    │   ├── auth.js
+    │   └── wallet.js
+    │
+    ├── assets/styles/
+    │   └── main.css
+    │
+    ├── components/
+    │   ├── layout/
+    │   │   ├── AppLayout.vue
+    │   │   ├── TopBar.vue
+    │   │   ├── ProfileMenu.vue   ← dropdown user (mon profil, metamask, etc.)
+    │   │   ├── Ticker.vue
+    │   │   └── TabNav.vue
+    │   ├── wallet/
+    │   │   ├── BalanceCard.vue   ← affiche aussi le solde en EUR
+    │   │   ├── SendForm.vue
+    │   │   └── HistoryList.vue
+    │   └── admin/
+    │       ├── AdminTopBar.vue
+    │       ├── TreasuryBox.vue
+    │       ├── CreateUserForm.vue
+    │       └── UsersTable.vue
+    │
+    └── views/
+        ├── LoginView.vue
+        ├── WalletView.vue
+        ├── ParisView.vue
+        ├── CasinoView.vue
+        ├── MilkView.vue
+        ├── ProfileView.vue       ← change mot de passe
+        ├── SelfCustodyView.vue   ← export clé + MetaMask
+        ├── BuyCampView.vue       ← acheter/vendre CAMP en EUR
+        └── admin/
+            ├── AdminLoginView.vue
+            └── AdminView.vue
+```

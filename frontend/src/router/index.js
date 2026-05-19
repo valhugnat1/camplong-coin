@@ -35,6 +35,26 @@ const routes = [
     meta: { needsUser: true }
   },
 
+  // ─── User · pages depuis le menu profil
+  {
+    path: '/profile',
+    name: 'profile',
+    component: () => import('@/views/ProfileView.vue'),
+    meta: { needsUser: true }
+  },
+  {
+    path: '/self-custody',
+    name: 'self-custody',
+    component: () => import('@/views/SelfCustodyView.vue'),
+    meta: { needsUser: true }
+  },
+  {
+    path: '/buy',
+    name: 'buy',
+    component: () => import('@/views/BuyCampView.vue'),
+    meta: { needsUser: true }
+  },
+
   // ─── Admin
   {
     path: '/admin/login',

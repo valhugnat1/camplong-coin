@@ -6,6 +6,11 @@
     <div class="balance-amount">
       {{ formatNum(me.balance) }}<sup>CAMP</sup>
     </div>
+    <div class="balance-eur">
+      ≈ <span class="mono">{{ formatEur(campToEur(me.balance)) }}</span>
+      <router-link to="/buy" class="topup-link">+ ajouter</router-link>
+    </div>
+
     <div class="conversions">
       ≈ <span class="mono">{{ formatNum(Math.round((me.balance || 0) * 0.42)) }}</span> baguettes ·
       ≈ <span class="mono">{{ ((me.balance || 0) / 1000).toFixed(2) }}</span> Lambo Camplong
@@ -35,6 +40,7 @@
 
 <script setup>
 import { ref } from 'vue'
+import { campToEur, formatEur, formatNum } from '@/config'
 
 const props = defineProps({
   me: { type: Object, required: true },
@@ -51,11 +57,6 @@ async function copyAddress() {
   } catch (e) {
     // silencieux
   }
-}
-
-function formatNum(n) {
-  if (n == null) return '0'
-  return Number(n).toLocaleString('fr-FR')
 }
 </script>
 
@@ -126,7 +127,7 @@ function formatNum(n) {
   font-size: 3.6em;
   letter-spacing: -0.04em;
   line-height: 1;
-  margin-bottom: 0.3em;
+  margin-bottom: 0.15em;
   background: linear-gradient(180deg, #fff 0%, #a1a1aa 130%);
   -webkit-background-clip: text;
   background-clip: text;
@@ -144,9 +145,36 @@ function formatNum(n) {
   top: 1em;
 }
 
-.conversions {
+.balance-eur {
+  display: flex;
+  align-items: center;
+  gap: 0.6em;
   color: var(--text-2);
-  font-size: 0.9em;
+  font-size: 0.95em;
+  margin-bottom: 0.8em;
+}
+.balance-eur .mono {
+  color: var(--text-1);
+  font-weight: 600;
+}
+.topup-link {
+  font-size: 0.78em;
+  font-weight: 600;
+  padding: 0.15em 0.5em;
+  border-radius: 999px;
+  background: var(--camp-soft);
+  color: var(--camp);
+  text-decoration: none;
+}
+.topup-link:hover {
+  background: var(--camp);
+  color: white;
+  text-decoration: none;
+}
+
+.conversions {
+  color: var(--text-3);
+  font-size: 0.85em;
 }
 
 .meta {
