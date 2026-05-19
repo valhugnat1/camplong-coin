@@ -220,6 +220,7 @@ def _order_dict(o: MarketOrder, user_email: str | None) -> dict:
         "status": o.status,
         "admin_note": o.admin_note or "",
         "done_at": o.done_at.isoformat() + "Z" if o.done_at else None,
+        "tx_hash": o.tx_hash,
     }
 
 
@@ -251,22 +252,101 @@ def update_order(
 ):
     """
     Met a jour le statut et/ou la note admin d'une demande.
-    Si on passe le statut a 'done' (et qu'il n'y etait pas deja), on envoie
-    un email de confirmation au user (en background, ne bloque pas la requete).
+
+    Quand on bascule en 'done' depuis un autre statut :
+      1. On execute le mouvement on-chain (atomique : si la tx echoue,
+         le statut n'est pas mis a jour) :
+         - BUY  -> adminTransfer(treasury -> user)  : user recoit ses CAMP
+         - SELL -> adminTransfer(user -> treasury) : user envoie ses CAMP
+      2. On log la tx dans la table transactions (pour l'historique user)
+      3. On stocke le tx_hash sur l'order
+      4. On envoie un email de confirmation au user (en background)
+
+    Si on repasse en 'pending' ou 'cancelled' apres avoir ete 'done',
+    le tx_hash et done_at sont conserves (audit, le mouvement on-chain
+    est irreversible de toute facon).
     """
     order = db.get(MarketOrder, order_id)
     if not order:
         raise HTTPException(404, f"Order #{order_id} introuvable")
 
     previous_status = order.status
+    becoming_done = body.status == "done" and previous_status != "done"
 
+    # ─── Etape 1 : si on passe en done, on fait le mouvement on-chain
+    # AVANT de toucher au statut. Si ca rate, l'order reste en pending.
+    if becoming_done:
+        user = db.get(User, order.username)
+        if not user:
+            raise HTTPException(
+                400,
+                f"Impossible de finaliser : user '{order.username}' n'existe plus"
+            )
+
+        if order.tx_hash:
+            # Garde-fou : si l'order a deja un tx_hash, c'est qu'elle a deja
+            # ete done une fois et qu'on l'a re-repassee en pending. On ne refait
+            # PAS le transfert (le mouvement on-chain est irreversible).
+            # On accepte juste de re-marquer le statut sans nouveau transfert.
+            pass
+        else:
+            if order.type == "buy":
+                # Treasury envoie les CAMP au user (le user a paye en EUR)
+                treasury_bal = get_balance_camp(treasury.address)
+                if order.amount_camp > treasury_bal:
+                    raise HTTPException(
+                        400,
+                        f"Treasury insuffisante : {treasury_bal} CAMP disponibles, "
+                        f"il en faut {order.amount_camp}. Refund ta treasury d'abord."
+                    )
+                from_addr, to_addr = treasury.address, user.address
+                tx_from_user = "__treasury__"
+                tx_to_user = order.username
+                tx_note = f"order #{order.id} buy"
+            else:
+                # SELL : on debite le user (Hugo lui a envoye les EUR)
+                user_bal = get_balance_camp(user.address)
+                if order.amount_camp > user_bal:
+                    raise HTTPException(
+                        400,
+                        f"Le user n'a que {user_bal} CAMP, impossible de debiter "
+                        f"{order.amount_camp}. Il a peut-etre transfere depuis sa "
+                        f"demande."
+                    )
+                from_addr, to_addr = user.address, treasury.address
+                tx_from_user = order.username
+                tx_to_user = "__treasury__"
+                tx_note = f"order #{order.id} sell"
+
+            # Execute la tx on-chain. Si ca raise, FastAPI rollback la transaction DB
+            # et renvoie le detail en HTTP 500. L'order reste en pending.
+            try:
+                tx_hash = admin_transfer(db, from_addr, to_addr, order.amount_camp)
+            except Exception as e:
+                db.rollback()
+                raise HTTPException(
+                    500,
+                    f"Echec du transfert on-chain : {e}. L'order reste en pending."
+                )
+
+            # Log dans la table transactions (pour l'historique du user)
+            db.add(Transaction(
+                ts=datetime.datetime.utcnow(),
+                from_username=tx_from_user,
+                to_username=tx_to_user,
+                amount=order.amount_camp,
+                note=tx_note,
+                tx_hash=tx_hash,
+            ))
+
+            order.tx_hash = tx_hash
+
+        # done_at se met a jour meme si on saute le transfert (re-done)
+        order.done_at = datetime.datetime.utcnow()
+
+    # ─── Etape 2 : update du statut et/ou note
     if body.status is not None:
         order.status = body.status
-        if body.status == "done" and previous_status != "done":
-            order.done_at = datetime.datetime.utcnow()
-        elif body.status != "done":
-            # Si on repasse en pending/cancelled, on enleve la date "done"
-            order.done_at = None
 
     if body.admin_note is not None:
         order.admin_note = body.admin_note
@@ -274,8 +354,8 @@ def update_order(
     db.commit()
     db.refresh(order)
 
-    # Notif user uniquement quand on bascule en "done" depuis autre chose
-    if body.status == "done" and previous_status != "done":
+    # ─── Etape 3 : email user (background, ne bloque pas)
+    if becoming_done:
         user = db.get(User, order.username)
         if user and user.email:
             background_tasks.add_task(
@@ -284,7 +364,6 @@ def update_order(
                 user.email,
             )
 
-    # On renvoie l'order complet
     user_email = db.query(User.email).filter(User.username == order.username).scalar()
     return _order_dict(order, user_email)
 

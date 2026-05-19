@@ -49,7 +49,9 @@ class MarketOrder(Base):
     """
     Demande d'achat ou de vente de CAMP.
     L'admin la traite manuellement (paiement Wero/Revolut) puis marque "done"
-    via le backoffice, ce qui declenche un email de confirmation au user.
+    via le backoffice, ce qui declenche :
+      - le transfert on-chain (treasury -> user pour buy, user -> treasury pour sell)
+      - un email de confirmation au user
     """
     __tablename__ = "market_orders"
     __table_args__ = {"schema": DB_SCHEMA}
@@ -65,3 +67,4 @@ class MarketOrder(Base):
     status = Column(String(16), default="pending", index=True)  # pending|done|cancelled
     admin_note = Column(String(512), default="")        # note admin
     done_at = Column(DateTime, nullable=True)
+    tx_hash = Column(String(66), nullable=True)          # tx du mouvement on-chain (si done)

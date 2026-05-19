@@ -99,6 +99,14 @@
             <span class="k">Traitée le</span>
             <span class="v mono">{{ formatDate(o.done_at) }}</span>
           </div>
+          <div v-if="o.tx_hash" class="row">
+            <span class="k">Tx on-chain</span>
+            <span class="v mono">
+              <a :href="'https://sepolia.basescan.org/tx/' + o.tx_hash" target="_blank" rel="noreferrer">
+                {{ o.tx_hash.slice(0, 10) }}…{{ o.tx_hash.slice(-6) }}
+              </a>
+            </span>
+          </div>
         </div>
 
         <!-- Actions -->
@@ -152,17 +160,23 @@
       </p>
 
       <div v-if="doneModal.order.type === 'buy'" class="reminder">
-        ⚠ Vérifie d'abord :<br />
-        1. Tu as bien reçu <b>{{ formatEur(doneModal.order.amount_eur) }}</b> sur Wero/Revolut.<br />
-        2. Tu as crédité <b>{{ formatNum(doneModal.order.amount_camp) }} CAMP</b>
-        à <b>{{ doneModal.order.username }}</b> via le backoffice.
+        <b>Confirme uniquement si :</b><br />
+        ✓ Tu as bien reçu <b>{{ formatEur(doneModal.order.amount_eur) }}</b> sur Wero/Revolut.
+        <hr class="mini-sep" />
+        <span class="auto-action">
+          ⚡ <b>Action automatique :</b> {{ formatNum(doneModal.order.amount_camp) }} CAMP seront
+          transférés <b>treasury → {{ doneModal.order.username }}</b> on-chain.
+        </span>
       </div>
       <div v-else class="reminder">
-        ⚠ Vérifie d'abord :<br />
-        1. Tu as débité <b>{{ formatNum(doneModal.order.amount_camp) }} CAMP</b>
-        à <b>{{ doneModal.order.username }}</b> via le backoffice.<br />
-        2. Tu as envoyé <b>{{ formatEur(doneModal.order.amount_eur) }}</b>
+        <b>Confirme uniquement si :</b><br />
+        ✓ Tu as envoyé <b>{{ formatEur(doneModal.order.amount_eur) }}</b>
         sur <span class="mono">{{ doneModal.order.handle }}</span>.
+        <hr class="mini-sep" />
+        <span class="auto-action">
+          ⚡ <b>Action automatique :</b> {{ formatNum(doneModal.order.amount_camp) }} CAMP seront
+          débités <b>{{ doneModal.order.username }} → treasury</b> on-chain.
+        </span>
       </div>
 
       <div class="field">
@@ -184,7 +198,7 @@
       <div class="modal-actions">
         <button class="btn-ghost" @click="closeDoneModal" :disabled="doneModal.busy">Annuler</button>
         <button class="btn-primary" @click="confirmDone" :disabled="doneModal.busy">
-          {{ doneModal.busy ? 'Envoi…' : 'Marquer comme traité' }}
+          {{ doneModal.busy ? 'Transfert on-chain…' : 'Confirmer et transférer' }}
         </button>
       </div>
 
@@ -571,6 +585,17 @@ onMounted(load)
   line-height: 1.6;
   margin-bottom: 1em;
 }
+.mini-sep {
+  border: none;
+  border-top: 1px dashed rgba(255, 122, 0, 0.25);
+  margin: 0.6em 0;
+}
+.auto-action {
+  display: block;
+  color: var(--camp);
+  font-size: 0.92em;
+}
+.auto-action b { color: var(--camp); }
 
 .email-info {
   padding: 0.5em 0.8em;

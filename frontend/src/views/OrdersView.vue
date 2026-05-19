@@ -63,6 +63,14 @@
               <span class="k">Traitée le</span>
               <span class="v mono">{{ formatDate(o.done_at) }}</span>
             </div>
+            <div v-if="o.tx_hash" class="row">
+              <span class="k">Transaction</span>
+              <span class="v mono">
+                <a :href="'https://sepolia.basescan.org/tx/' + o.tx_hash" target="_blank" rel="noreferrer">
+                  Voir sur BaseScan →
+                </a>
+              </span>
+            </div>
           </div>
         </article>
       </div>
