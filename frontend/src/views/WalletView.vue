@@ -11,13 +11,14 @@
 
         <div class="hype-card">
           <h3 class="hype-title">Le plan, étape par étape</h3>
-          <p class="hype-text">
-            <span class="accent">1.</span> Accumuler. <br />
-            <span class="accent">2.</span> Continuer d'accumuler. <br />
-            <span class="accent">3.</span> Démissionner par .docx (déjà rédigé). <br />
-            <span class="accent">4.</span> Acheter une ferme. Lait. <br />
-            <span class="accent">5.</span> Devenir le sujet de chuchotements.
-          </p>
+          <ol class="hype-steps">
+            <li><span class="step-num">1</span> Accumuler du CAMP</li>
+            <li><span class="step-num">2</span> Acheter une ferme</li>
+            <li><span class="step-num">3</span> Produire du lait <em>en quantité massive</em></li>
+            <li><span class="step-num">4</span> Vendre sur les marchés actions</li>
+            <li><span class="step-num">5</span> Titriser le lait en produits dérivés</li>
+            <li><span class="step-num">6</span> Devenir <b>le Loup du Wall Street</b></li>
+          </ol>
         </div>
 
         <div class="full-width">
@@ -92,17 +93,51 @@ onMounted(() => {
   font-family: serif;
 }
 .hype-title {
-  font-size: 1.3em;
-  margin-bottom: 0.3em;
+  font-size: 1.15em;
+  margin-bottom: 0.6em;
 }
-.hype-text {
-  color: var(--text-1);
-  font-size: 0.92em;
-  line-height: 1.55;
+.hype-steps {
+  list-style: none;
+  padding: 0;
   margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25em;
 }
-.hype-text .accent {
+.hype-steps li {
+  display: flex;
+  align-items: center;
+  gap: 0.6em;
+  color: var(--text-1);
+  font-size: 0.88em;
+  line-height: 1.3;
+  padding: 0.25em 0;
+}
+.hype-steps em {
+  color: var(--text-0);
+  font-style: italic;
+  font-weight: 500;
+}
+.hype-steps b {
   color: var(--camp);
-  font-weight: 600;
+  font-weight: 700;
+}
+.step-num {
+  display: inline-grid;
+  place-items: center;
+  width: 1.4em;
+  height: 1.4em;
+  border-radius: 50%;
+  background: var(--camp-soft);
+  color: var(--camp);
+  font-size: 0.78em;
+  font-weight: 700;
+  flex-shrink: 0;
+  font-family: 'JetBrains Mono', monospace;
+}
+.hype-steps li:last-child .step-num {
+  background: var(--camp);
+  color: white;
+  box-shadow: 0 0 12px var(--camp-glow);
 }
 </style>

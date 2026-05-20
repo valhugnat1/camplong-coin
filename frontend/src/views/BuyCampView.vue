@@ -192,9 +192,8 @@
             </div>
 
             <p class="timeline">
-              ⏱ Hugo te crédite généralement <b>en moins d'une heure</b> en heure de bureau.
-              Le soir et le week-end, il est probablement en train de jouer à Catan ou Dune.
-              Sois patient. Tu recevras un email quand c'est fait.
+              ⏱ Traité manuellement. Si t'as besoin que ça soit rapide,
+              ping Hugo par message direct. Tu reçois un email quand c'est fait.
             </p>
           </template>
 
@@ -206,13 +205,12 @@
             </p>
 
             <p class="timeline">
-              ⏱ Les ventes sont traitées manuellement. Compte quelques heures en semaine,
-              plus le week-end. Si t'as besoin urgent, ping Hugo direct.
+              ⏱ Traité manuellement. Ping Hugo direct si urgent.
             </p>
           </template>
 
           <div class="fine-print">
-            Pas de KYC, pas de blockchain analytics, pas de SEC. Juste un mec qui code et ses potes.
+            Pas de KYC, pas de blockchain analytics, pas de SEC.
             <b>C'est très exactement ce qui se passe avant que tout devienne un produit financier régulé.</b>
             Profite.
           </div>

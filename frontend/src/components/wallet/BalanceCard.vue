@@ -12,8 +12,9 @@
     </div>
 
     <div class="conversions">
-      ≈ <span class="mono">{{ formatNum(Math.round((me.balance || 0) * 0.42)) }}</span> baguettes ·
-      ≈ <span class="mono">{{ ((me.balance || 0) / 1000).toFixed(2) }}</span> Lambo Camplong
+      ≈ <span class="mono">{{ formatNum(Math.round((me.balance || 0) / 120)) }}</span> baguettes ·
+      ≈ <span class="mono">{{ formatNum(Math.round((me.balance || 0) / 600)) }}</span> bières ·
+      ≈ <span class="mono">{{ formatNum(Math.round((me.balance || 0) / 2500)) }}</span> raclettes
     </div>
 
     <div class="meta">
