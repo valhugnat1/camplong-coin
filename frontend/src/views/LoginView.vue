@@ -543,18 +543,25 @@ async function submit() {
   max-width: 420px;
   background: linear-gradient(
     180deg,
-    rgba(19, 19, 26, 0.78) 0%,
-    rgba(13, 13, 18, 0.88) 100%
+    rgba(19, 19, 26, 0.2) 0%,
+    rgba(13, 13, 18, 0.4) 100%
   );
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--border);
   border-radius: 20px;
   padding: 2.5em 2em;
   overflow: hidden;
   box-shadow:
     0 25px 70px -20px rgba(0, 0, 0, 0.8),
-    0 0 0 1px rgba(255, 255, 255, 0.02) inset;
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset; /* Bordure interne très légèrement accentuée */
+}
+.login-title,
+.login-sub,
+.field-label,
+.logo-text,
+.sub-brand {
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
 }
 .login-card::before {
   content: "";
@@ -591,7 +598,7 @@ async function submit() {
 }
 .login-sub b {
   color: var(--camp);
-  font-weight: 600;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
 }
 
 .mono {
@@ -614,5 +621,16 @@ async function submit() {
 .admin-link:hover {
   color: var(--camp);
   text-decoration: none;
+}
+
+.login-sub,
+.sub-brand,
+.field-label,
+.footer {
+  color: rgba(255, 255, 255, 0.9) !important;
+  font-weight: 500;
+  text-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.9),
+    0 2px 8px rgba(0, 0, 0, 0.8);
 }
 </style>
