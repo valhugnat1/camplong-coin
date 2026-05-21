@@ -12,9 +12,10 @@ Document destiné aux développeurs (humains ou agents IA) qui veulent contribue
 4. [Backend](#backend)
 5. [Frontend](#frontend)
 6. [Module Paris (P2P bets)](#module-paris-p2p-bets)
-7. [Sécurité & secrets](#securite--secrets)
-8. [Déploiement](#deploiement)
-9. [Conventions & gotchas](#conventions--gotchas)
+7. [Module Casino (coinflip + roulette)](#module-casino-coinflip--roulette)
+8. [Sécurité & secrets](#securite--secrets)
+9. [Déploiement](#deploiement)
+10. [Conventions & gotchas](#conventions--gotchas)
 
 ---
 
@@ -88,15 +89,19 @@ Le switch se fait via la variable `DB_SCHEMA` (lue dans `config.py`). Tout le co
 
 ```
 camplong (DB)
-├── schema: test       ├── users           (user + comptes système)
+├── schema: test       ├── users               (user + comptes système)
 │                      ├── transactions
 │                      ├── nonces
 │                      ├── market_orders
-│                      └── bets            (cf. § Module Paris)
+│                      ├── bets                (cf. § Module Paris)
+│                      ├── app_settings        (clés/valeurs admin-tweakables)
+│                      ├── rng_seeds           (commit-reveal provably fair)
+│                      ├── coinflip_rounds     (cf. § Module Casino)
+│                      └── roulette_spins      (cf. § Module Casino)
 └── schema: prod       (mêmes tables)
 ```
 
-Les tables `rng_seeds`, `coinflip_rounds`, etc. sont préparées par `migrate_v4_extensions.py` mais ne sont pas encore exploitées (cf. `EXTENSIONS.md`).
+Les tables `poker_*`, `milk_*` existent (préparées par `migrate_v4_extensions.py`) mais ne sont pas encore exploitées (cf. `EXTENSIONS.md`).
 
 Garanties :
 - Le code applique `SET search_path TO "<schema>", public` à chaque nouvelle connexion (ceinture)
@@ -166,9 +171,52 @@ Workflow :
 3. Toute l'opération est atomique : si la tx on-chain échoue, l'order reste en `pending` (rien n'est commit)
 4. Garde-fou contre le double-transfert : si on repasse une order de done → pending → done, le `tx_hash` étant déjà set, on ne refait pas le mouvement on-chain
 
+**`app_settings`** — clés/valeurs admin-tweakables. Permet à l'admin de changer des paramètres à chaud depuis le backoffice (ex : l'edge maison du coinflip) sans redéploiement.
+
+| Colonne        | Type         | Notes                                          |
+|----------------|--------------|------------------------------------------------|
+| `key` (PK)     | VARCHAR(64)  | ex: `coinflip_edge_pct`, `roulette_min_bet`    |
+| `value`        | VARCHAR(256) | parsé à la lecture (int/float selon la clé)   |
+| `description`  | TEXT         | message d'aide affiché dans le backoffice     |
+| `updated_at`   | TIMESTAMP    | onupdate=now                                   |
+
+La whitelist des clés autorisées en écriture (`WRITABLE_KEYS`) est dans `services/settings.py`. Validation par-clé dans `routers/admin.py::admin_update_setting` (bornes, types). Pas de cache : la table est petite et lue ~1×/play.
+
+**`rng_seeds`** — commit-reveal pour les tirages aléatoires provably fair.
+
+| Colonne        | Type         | Notes                                          |
+|----------------|--------------|------------------------------------------------|
+| `id` (PK)      | INT auto     |                                                |
+| `purpose`      | VARCHAR(32)  | `coinflip`, `roulette`, …                      |
+| `ref_id`       | INT          | id de la round/spin associée (lié après flush) |
+| `seed_hash`    | VARCHAR(64)  | sha256(secret) — publié AVANT le tirage        |
+| `seed_secret`  | VARCHAR(64)  | secret 32 bytes — publié APRÈS                 |
+| `revealed`     | BOOLEAN      |                                                |
+| `client_seed`  | VARCHAR(128) | contribution random du user                    |
+| `created_at`   | TIMESTAMP    |                                                |
+| `revealed_at`  | TIMESTAMP    | nullable                                       |
+
+Flow (cf. `services/randomness.py`) :
+1. `commit(db, purpose)` : génère un secret, retourne `(seed_hash, seed_id)`.
+2. `reveal(db, seed_id, client_seed)` : marque revealed=True, retourne `(server_seed, combined_hash)` où `combined_hash = sha256(server_seed + ":" + client_seed)`.
+3. `derive_int(combined_hash, modulo)` : convertit les 8 premiers chars hex en int et applique `% modulo`. Utilisé pour `% 2` (coinflip) ou `% 37` (roulette).
+
+L'utilisateur peut vérifier a posteriori que `sha256(server_seed) == seed_hash`.
+
+**`coinflip_rounds`** — historique des parties de pile/face. Settle dans la même requête HTTP que le play (commit + reveal en un seul aller-retour pour l'UX, le user peut vérifier après coup). Edge maison configurable via `app_settings.coinflip_edge_pct`. Payout gagnant = `int(bet × 2 × (1 - edge/100))` (= ~1.96× pour 2%).
+
+**`roulette_spins`** — historique des spins de roulette européenne (37 cases). Un spin = N mises agrégées (numéros pleins 35:1, dozens/columns 2:1, even-money 1:1) → **1 lock unique** vers `casino_bank` (somme des mises), **1 payout net unique** si gain > 0. `bets_json` stocke la liste `[{spot, amount}, …]`. L'edge n'est pas configurable (mécanique : 1/37 ≈ 2.70%).
+
+Voir § *Module Casino* pour le détail des flows.
+
 ### Migrations
 
-`scripts/init_db.py` crée les tables au premier setup. Pour les changements schéma post-launch on a eu migrate_v2.py et migrate_v3.py (mtn supprimés).
+`scripts/init_db.py` crée les tables au premier setup. Migrations successives (idempotentes, multi-schémas) :
+- `migrate_v4_extensions.py` : tables paris + casino + poker + milk + `rng_seeds` + colonnes `account_type` / `system_role` sur users.
+- `migrate_v5_bet_votes.py` : colonnes `creator_vote` / `opponent_vote` sur `bets` pour la résolution amiable.
+- `migrate_v6_app_settings.py` : table `app_settings` + seed des paramètres casino par défaut (`coinflip_edge_pct=2`, `coinflip_min_bet=1`, `coinflip_max_bet=200`, `roulette_min_bet=1`, `roulette_max_bet=200`).
+
+Chaque script s'applique aux deux schémas par défaut (`test`, puis `prod`) et est ré-exécutable sans effet de bord (CREATE IF NOT EXISTS, ON CONFLICT DO NOTHING, etc.). Lancer ensuite `seed_system_accounts.py` après v4 pour créer les wallets de `casino_bank`, `bets_escrow`, `poker_bank`, `milk_pool_lait_entier`.
 
 
 ---
@@ -180,23 +228,32 @@ Workflow :
 ```
 backend/
 ├── main.py              # FastAPI app, CORS, mount des routers
-├── config.py            # lit .env, expose les constantes (incl. BETS)
+├── config.py            # lit .env, expose les constantes statiques (BETS, JWT, …)
 ├── database.py          # engine SQLAlchemy + session + search_path
-├── models.py            # User, Transaction, Nonce, MarketOrder, Bet
+├── models.py            # User, Transaction, Nonce, MarketOrder, Bet,
+│                        # AppSetting, RngSeed, CoinflipRound, RouletteSpin
 ├── schemas.py           # tous les Pydantic In/Out
 ├── security.py          # JWT decode, deps current_user / require_admin, Fernet
 ├── blockchain.py        # web3 init, helpers admin_transfer / balanceOf / nonce
 ├── email_service.py     # SMTP best-effort (orders + bets notifs)
 ├── services/
-│   └── escrow.py        # lock/release vers comptes système (cf. § Module Paris)
+│   ├── escrow.py        # lock/release vers comptes système (paris, casino, …)
+│   ├── settings.py      # lecture/écriture des app_settings, defaults de secours
+│   ├── randomness.py    # commit-reveal (sha256) + derive_int
+│   ├── coinflip.py      # play() : lock → tirage → release si gain
+│   └── roulette.py      # spin() : N mises agrégées → 1 lock + 1 payout net
 ├── routers/
 │   ├── users.py         # /login, /me, /transfer, /history, /orders, /me/*
 │   ├── admin.py         # /admin/login, /admin/users, /admin/credit|debit,
-│   │                    # /admin/orders, /admin/bets/*
-│   └── bets.py          # /bets/*, /me/bets, vote/match/cancel/resolve
+│   │                    # /admin/orders, /admin/bets/*,
+│   │                    # /admin/settings/*, /admin/casino/stats
+│   ├── bets.py          # /bets/*, /me/bets, vote/match/cancel/resolve
+│   └── casino.py        # /casino/coinflip/*, /casino/roulette/*,
+│                        # /me/coinflip, /me/roulette
 └── scripts/
     ├── migrate_v4_extensions.py   # tables paris/casino/lait + comptes système
     ├── migrate_v5_bet_votes.py    # colonnes creator_vote / opponent_vote
+    ├── migrate_v6_app_settings.py # table app_settings + seed casino defaults
     └── seed_system_accounts.py    # crée bets_escrow, casino_bank, poker_bank
 ```
 
@@ -245,6 +302,15 @@ backend/
 | GET     | `/admin/orders`              | admin       | Liste des demandes (filtre `?status=pending|done|cancelled|all`) |
 | PATCH   | `/admin/orders/{id}`         | admin       | Change statut + admin_note. Si done → exécute tx + email   |
 | DELETE  | `/admin/orders/{id}`         | admin       | Suppression définitive                                     |
+| GET     | `/admin/settings`            | admin       | Liste les `app_settings` (key/value + description)         |
+| PATCH   | `/admin/settings/{key}`      | admin       | Met à jour une setting (whitelist + validation par clé)    |
+| GET     | `/admin/casino/stats`        | admin       | Solde `casino_bank`, PnL coinflip/roulette, RTP observé, derniers rounds/spins |
+| GET     | `/casino/coinflip/config`    | user        | min_bet, max_bet, edge_pct, win_multiplier (lus en DB)     |
+| POST    | `/casino/coinflip/play`      | user        | Joue 1 partie. Lock → tirage → release si gain             |
+| GET     | `/me/coinflip`               | user        | Historique des derniers flips du user                      |
+| GET     | `/casino/roulette/config`    | user        | min_bet, max_bet, house_edge_pct (2.70%, mécanique)        |
+| POST    | `/casino/roulette/spin`      | user        | Joue 1 spin avec N mises agrégées                          |
+| GET     | `/me/roulette`               | user        | Historique des derniers spins du user                      |
 
 Doc auto-générée OpenAPI : `http://localhost:8000/docs`.
 
@@ -278,7 +344,9 @@ frontend/src/
 ├── config.js                    # ⭐ taux EUR↔CAMP, handles paiement, chain, token
 │
 ├── api/
-│   └── client.js                # wrapper fetch avec auto-injection Bearer + handle 401 global
+│   ├── client.js                # wrapper fetch avec auto-injection Bearer + handle 401 global
+│   ├── bets.js                  # REST wrappers paris (user + admin)
+│   └── casino.js                # REST wrappers coinflip + roulette + adminSettings
 │
 ├── router/
 │   └── index.js                 # routes + guard (needsUser / needsAdmin / guest)
@@ -286,7 +354,9 @@ frontend/src/
 ├── stores/
 │   ├── auth.js                  # userToken + adminToken, persistés localStorage
 │   ├── wallet.js                # me, users, history (refresh centralisé)
-│   └── orders.js                # orders admin (partagé entre AdminView et AdminOrdersView pour le compteur pending)
+│   ├── orders.js                # orders admin (partagé entre AdminView et AdminOrdersView pour le compteur pending)
+│   ├── bets.js                  # state + actions paris (open/mine/detail + create/match/cancel/resolve/vote)
+│   └── casino.js                # config + history + actions coinflip + roulette (lock/play/spin)
 │
 ├── assets/styles/
 │   └── main.css                 # variables CSS, primitives (boutons, inputs, alerts), grain noise en background
@@ -311,17 +381,25 @@ frontend/src/
 └── views/
     ├── LoginView.vue            # avec coin 3D low-poly animé en background
     ├── WalletView.vue           # vue principale
-    ├── ParisView.vue            # placeholder Polymarket-like
-    ├── CasinoView.vue           # placeholder slots/roulette
+    ├── CasinoView.vue           # hub casino : tuiles cliquables (coinflip + roulette jouables)
     ├── MilkView.vue             # placeholder Bourse du Lait (chart SVG)
     ├── ProfileView.vue          # email + mot de passe
     ├── SelfCustodyView.vue      # export clé + ajout MetaMask via wallet_addEthereumChain / watchAsset
     ├── BuyCampView.vue          # création de demandes achat/vente
     ├── OrdersView.vue           # historique des demandes du user
+    ├── paris/
+    │   ├── ParisListView.vue
+    │   ├── ParisCreateView.vue
+    │   └── ParisDetailView.vue
+    ├── casino/
+    │   ├── CoinflipView.vue     # pile/face + roue 3D CSS + provably fair
+    │   └── RouletteView.vue     # tapis HTML/CSS + roue qui décélère sur le bon n°
     └── admin/
         ├── AdminLoginView.vue
-        ├── AdminView.vue        # treasury + users + bandeau "demandes en attente"
-        └── AdminOrdersView.vue  # filtres + modal "Confirmer et transférer" → tx on-chain auto
+        ├── AdminView.vue            # treasury + users + bandeau "demandes en attente"
+        ├── AdminOrdersView.vue      # filtres + modal "Confirmer et transférer" → tx on-chain auto
+        ├── AdminBetsView.vue        # liste + filtres + force-resolve/cancel
+        └── AdminCasinoView.vue      # éditeur des app_settings (edge, limites) + PnL + RTP
 ```
 
 ### `config.js` — point central des paramètres
@@ -477,6 +555,71 @@ Tant que ces crons n'existent pas, l'admin peut faire `POST /admin/bets/{id}/can
 - `frontend/src/config.js` → `BETS = { minStake, maxStake, maxOpenBetsPerUser, arbiterDefaultFeePct }` (à garder en sync avec `backend/config.py::BETS`)
 
 Le username courant pour les vérifications de rôle (`isCreator`, `isOpponent`, `isArbiter`) se lit dans `wallet.me.username` — pas dans `auth` (qui n'expose que les tokens).
+
+---
+
+## Module Casino (coinflip + roulette)
+
+Deux jeux "joueur vs banque" qui réutilisent les mêmes primitives : escrow vers le compte système `casino_bank`, RNG vérifiable commit-reveal, payouts on-chain agrégés en 1 release par partie.
+
+### Patterns partagés
+
+**Banque casino**. Compte système (`account_type='system'`, `system_role='casino_bank'`) créé par `seed_system_accounts.py`. Reçoit toutes les mises et paie tous les gains. À capitaliser depuis le backoffice (~10× la mise max recommandé pour absorber la variance).
+
+**RNG vérifiable** (`services/randomness.py`). Pour chaque tirage :
+1. `commit(db, purpose)` → publie `sha256(secret)` (le `seed_hash`), garde `secret` côté serveur.
+2. `reveal(db, seed_id, client_seed)` → marque revealed et calcule `combined_hash = sha256(server_seed + ":" + client_seed)`. Le `client_seed` est généré côté front (crypto.getRandomValues) pour que le user puisse contribuer à l'aléa.
+3. `derive_int(combined_hash, modulo)` → tire l'outcome (modulo 2 pour coinflip, modulo 37 pour roulette).
+
+Commit + reveal se font dans la même requête HTTP (le user ne voit pas le hash *avant* de miser), mais le hash + le secret restent en DB pour vérification a posteriori — `sha256(server_seed)` doit matcher `seed_hash` annoncé.
+
+**Paramètres tweakables à chaud**. Les limites de mise et l'edge du coinflip vivent dans la table `app_settings` (cf. §DB), pas dans `config.py`. L'admin peut les modifier depuis `/admin/casino` sans redéploiement : `services.settings.get_int/get_float` les relit à chaque play, pas de cache. Whitelist des clés autorisées dans `services/settings.py::WRITABLE_KEYS`, validation par-clé dans `routers/admin.py::admin_update_setting` (bornes, types, cohérence min≤max).
+
+**Pattern atomique** (identique à l'escrow paris) :
+1. Commit RNG (flush DB, pas de commit).
+2. `escrow.lock(user → casino_bank, total_bet)` — tx on-chain ; sur échec, rollback session.
+3. Reveal + calcul de l'outcome + payout théorique.
+4. Si gain : `escrow.release(casino_bank → user, payout)`. Si la release échoue alors que le lock a réussi (banque casino vidée par exemple), on **raise sans rollback** : la mise est bloquée côté casino, le user gagne mais ne reçoit rien → l'admin règle à la main. Pas de "tx ghost".
+5. Persiste la round + lie le seed à son id (`ref_id`).
+6. Commit final.
+
+### Coinflip (`services/coinflip.py`)
+
+- Mise + choix `heads`/`tails` + `client_seed` → POST `/casino/coinflip/play`.
+- `outcome = 'heads' if derive_int(combined, 2) == 0 else 'tails'`.
+- Payout gagnant = `int(bet × 2 × (1 - edge_pct/100))`. Avec edge=2% → 1.96× ; edge=5% → 1.90× ; edge=0% → 2.00×.
+- Edge clamp `[0, 50[` au moment du play (garde-fou même si l'admin entre une valeur folle).
+- Table : `coinflip_rounds`. Réponse : `PlayResult` (id, outcome, win, payout, seed_hash, server_seed, combined_hash, tx_hash_lock, tx_hash_payout, new_balance).
+
+### Roulette (`services/roulette.py`)
+
+- N mises agrégées en un spin → POST `/casino/roulette/spin`. Body : `{ bets: [{spot, amount}, …], client_seed }`. Max 50 spots par spin.
+- Spots supportés en V1 :
+  - Numéro plein : `"n=0"` … `"n=36"` — payout 35:1 (mise × 36).
+  - Couleur : `"red"` / `"black"` — 1:1 (×2). 0 = vert, ne paye ni rouge ni noir.
+  - Pair / Impair : `"even"` / `"odd"` — 1:1 ; 0 ne paye ni l'un ni l'autre.
+  - Manque / Passe : `"low"` (1-18) / `"high"` (19-36) — 1:1 ; 0 ne paye rien.
+  - Douzaines : `"dozen=1"` / `"dozen=2"` / `"dozen=3"` — 2:1 (×3).
+  - Colonnes : `"col=1"` / `"col=2"` / `"col=3"` — 2:1 (×3).
+- `outcome = derive_int(combined, 37)` (0-36). Couleur dérivée de l'ensemble standard `RED_NUMBERS`.
+- **Edge non configurable** : mécanique 1/37 ≈ 2.70% sur tous les spots — payout numéro plein 35:1 vs proba 1/37, etc. Seules les limites de mise totale (somme des spots) sont tweakables.
+- **1 lock unique + 1 payout net unique** : pour éviter N tx on-chain pour N spots, on agrège. `total_bet = sum(amount)` → 1 `escrow.lock`. `total_payout = sum(evaluate_bet(b, outcome))` → 1 `escrow.release` (skip si 0).
+- Table : `roulette_spins`. `bets_json` stocke la liste pour audit a posteriori. `winning_spots` est calculé à la résolution et renvoyé au front pour le glow doré.
+
+### Front (`views/casino/`)
+
+- `CoinflipView.vue` : pièce 3D CSS qui tourne, choix Pile/Face avec jetons codés couleur, panneau "Vérifier le tirage" qui affiche seed_hash/server_seed/combined_hash/formule.
+- `RouletteView.vue` : tapis HTML/CSS (12 colonnes × 3 rangées + 2:1 en bout + dozens + outside), roue européenne SVG-like CSS qui décélère sur 7s en cubic-bezier `(0.04, 0.86, 0.12, 1)` (forward-only, calcul du delta sur la position actuelle). Après l'arrêt : reveal du panneau gain/perte + glow doré 3s sur les cases gagnantes, puis clear automatique du tapis.
+- `stores/casino.js` : Pinia avec deux blocs distincts (coinflip + roulette), `loadConfig` au montage + `loadHistory`, action `play`/`rouletteSpin` qui rafraîchit le wallet après settle.
+
+### Admin (`views/admin/AdminCasinoView.vue`)
+
+- **Settings éditables** : `coinflip_edge_pct`, `coinflip_min_bet`, `coinflip_max_bet`, `roulette_min_bet`, `roulette_max_bet`. Sauvegarde par champ (bouton "Sauver" actif uniquement si la valeur a changé). Validation backend + preview live du nouveau multiplicateur côté coinflip.
+- **Stats temps réel** : solde `casino_bank`, PnL coinflip et roulette séparément (`volume_bet - volume_payout`), RTP observé vs attendu (`100 - edge_configured` pour coinflip, `100 - edge_mechanical` pour roulette), 20 derniers rounds / spins.
+
+### Concurrence
+
+Pas de `SELECT FOR UPDATE` nécessaire — chaque round/spin est indépendant et créé en une seule transaction. Les éventuels conflits de nonce treasury entre deux plays parallèles sont déjà gérés par `blockchain.py::_next_treasury_nonce()` (verrou pessimiste sur la ligne nonce).
 
 ---
 

@@ -46,8 +46,8 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 
 const games = [
   { icon: '🪙', name: 'Coinflip',      desc: 'Pile ou face. Pas plus simple. Pas moins addictif.',    rtp: 98.0, to: '/casino/coinflip' },
+  { icon: '🎡', name: 'Roulette',      desc: 'Rouge ou noir. Pair ou impair. Toi ou personne.',       rtp: 97.3, to: '/casino/roulette' },
   { icon: '🎰', name: 'Slots',         desc: '3 rouleaux, des emojis, du regret. Le classique.',      rtp: 96.2 },
-  { icon: '🎡', name: 'Roulette',      desc: 'Rouge ou noir. Pair ou impair. Toi ou personne.',       rtp: 97.3 },
   { icon: '🃏', name: 'Poker (Texas)', desc: 'Bluffe tes potes. Ruine-toi en famille.',               rtp: 100  },
   { icon: '🎲', name: 'Dés',           desc: 'Tu mises sur un nombre. Ça tombe. Ou pas.',             rtp: 99.0 },
   { icon: '💥', name: 'Crash',         desc: 'La fusée décolle. Tu sors quand ? Spoiler : trop tard.', rtp: 99.0 }

@@ -1,25 +1,30 @@
-# EXTENSIONS.md — Modules casino, bourse du lait
+# EXTENSIONS.md — Modules Poker, Bourse du Lait
 
-Spec technique des modules **Casino** (Pile ou Face, Roulette, Poker) et **Bourse du Lait** (AMM x·y=k) — pas encore implémentés. Ce document complète `AGENTS.md` et ne le remplace pas.
+Spec technique des modules **Poker** et **Bourse du Lait** (AMM x·y=k) — pas encore implémentés. Ce document complète `AGENTS.md` et ne le remplace pas.
 
-> Le module **Paris** a été déplacé dans `AGENTS.md` une fois livré — il n'est plus listé ici.
+> Modules **déjà livrés** (spec déplacée dans `AGENTS.md`) :
+> - **Paris** (P2P bets)
+> - **Casino — Pile ou Face** (coinflip, edge configurable à chaud)
+> - **Casino — Roulette** (européenne, 37 cases)
+>
+> La table `app_settings` qui permet à l'admin de régler les paramètres
+> (edge coinflip, limites de mise) sans redéploiement est documentée
+> dans `AGENTS.md` également.
 
-> Lecture conseillée : `AGENTS.md` d'abord (architecture custodial, contrat, blockchain.py, schémas test/prod).
+> Lecture conseillée : `AGENTS.md` d'abord (architecture custodial, contrat, blockchain.py, schémas test/prod, modules Paris et Casino livrés).
 
 ---
 
 ## Table des matières
 
 1. [Vue d'ensemble & refactoring global](#1-vue-densemble--refactoring-global)
-2. [Module Casino — Pile ou Face](#3-module-casino--pile-ou-face)
-3. [Module Casino — Roulette](#4-module-casino--roulette)
-4. [Module Casino — Poker](#5-module-casino--poker)
-5. [Module Bourse du Lait](#6-module-bourse-du-lait)
-6. [Points d'attention](#7-points-dattention)
-7. [Améliorations & autres jeux possibles](#8-améliorations--autres-jeux-possibles)
+2. [Module Casino — Poker](#5-module-casino--poker)
+3. [Module Bourse du Lait](#6-module-bourse-du-lait)
+4. [Points d'attention](#7-points-dattention)
+5. [Améliorations & autres jeux possibles](#8-améliorations--autres-jeux-possibles)
 
-> Les ancres des sections ci-dessous gardent leur numérotation d'origine (3 → 8) ;
-> seule la TOC a été renumérotée après le départ du module Paris.
+> Les ancres des sections gardent leur numérotation d'origine (5 → 8) ;
+> seule la TOC a été renumérotée après le départ des modules Paris et Casino.
 
 ---
 
@@ -31,13 +36,13 @@ Le projet passe d'un seul concept simple (transfer P2P + market orders manuels) 
 
 **On-chain vs off-chain.** Le projet actuel fait un `adminTransfer` on-chain pour chaque mouvement de CAMP. C'est OK pour les transferts P2P (volume faible, latence ~2s acceptable). C'est intenable pour le poker (multiples mises par main) et limite pour le trading rapide (bourse du lait). On adopte le pattern **escrow on-chain + livre off-chain** : les fonds bougent on-chain au début et à la fin d'une "session de jeu", mais les actions de jeu intermédiaires se font dans la DB.
 
-| Module | Pattern | Tx on-chain par cycle |
-|---|---|---|
-| Paris | Escrow on-chain immédiat | 3 (mise creator + mise matcher + settlement) |
-| Pile ou Face | On-chain par flip | 2 (mise + payout) — peut être nettés en 1 en cas de perte |
-| Roulette | On-chain par spin | 2 (mises agrégées + payout net) |
-| Poker | Sit-in / sit-out only | 2 par session (deposit + withdraw), peu importe le nombre de mains |
-| Bourse du Lait | On-chain par swap | 2 (mise + payout) ou 1 si on aggrège |
+| Module | Pattern | Tx on-chain par cycle | Statut |
+|---|---|---|---|
+| Paris | Escrow on-chain immédiat | 3 (mise creator + mise matcher + settlement) | ✅ livré |
+| Pile ou Face | On-chain par flip | 2 (mise + payout) — 1 seule si perte (pas de release) | ✅ livré |
+| Roulette | On-chain par spin | 2 (mises agrégées + payout net) — 1 seule si perte | ✅ livré |
+| Poker | Sit-in / sit-out only | 2 par session (deposit + withdraw), peu importe le nombre de mains | à faire |
+| Bourse du Lait | On-chain par swap | 2 (mise + payout) ou 1 si on aggrège | à faire |
 
 **Comptes système.** Tu as déjà la treasury. On ajoute des comptes "système" pour isoler les fonds par produit, ce que tu as demandé pour la banque casino. Tracking comptable bien plus propre, et limite le rayon d'explosion en cas de bug.
 
@@ -267,10 +272,14 @@ export const BETS = {
   maxOpenBetsPerUser: 10,
 }
 
+// NB : pour les modules casino DÉJÀ LIVRÉS (coinflip, roulette), les
+// paramètres (edge_pct, min_bet, max_bet) sont stockés dans la table
+// DB `app_settings` et modifiables à chaud depuis le backoffice
+// (`/admin/casino`). Pas de duplication front/back nécessaire — voir
+// AGENTS.md, section « Module Casino ». Ne reste ici que la config
+// pour les modules à venir (poker).
 export const CASINO = {
-  coinflip: { minBet: 1, maxBet: 200, edgePct: 2 },     // edge maison
-  roulette: { minBet: 1, maxBet: 200, edgePct: 2.7 },   // 1/37 = ~2.7%
-  poker:    { minBuyIn: 50, maxBuyIn: 1000 },
+  poker: { minBuyIn: 50, maxBuyIn: 1000 },
 }
 
 export const MILK = {
@@ -324,286 +333,6 @@ treasury balance + system_account balances + sum(user balances) == total_supply 
 ```
 
 Si ça ne matche pas, il y a un bug quelque part. Ce check tourne aussi via un cron 1×/jour et alerte par email à l'admin si écart > 0.01 CAMP.
-
----
-
-## 3. Module Casino — Pile ou Face
-
-### 3.1 Concept
-
-Le user mise, choisit pile ou face, le backend tire au sort, paye 2× la mise si gagné (ou plutôt `2 × (1 - edge_pct/100)`, soit ~1.96× pour 2% d'edge).
-
-C'est le plus simple des trois jeux casino, à implémenter en premier comme prototype du pattern "joueur vs banque".
-
-### 3.2 Schéma DB
-
-```sql
-CREATE TABLE coinflip_rounds (
-  id            SERIAL PRIMARY KEY,
-  username      VARCHAR(64) NOT NULL REFERENCES users(username),
-  bet_amount    BIGINT NOT NULL,
-  choice        VARCHAR(8) NOT NULL,    -- 'heads' | 'tails'
-  outcome       VARCHAR(8) NULL,        -- 'heads' | 'tails' (null avant settlement)
-  win           BOOLEAN NULL,
-  payout        BIGINT NOT NULL DEFAULT 0,   -- 0 si perdu, sinon 2 * bet * (1 - edge)
-
-  client_seed   VARCHAR(64) NOT NULL,   -- contribution user (random côté front)
-  rng_seed_id   INT NOT NULL REFERENCES rng_seeds(id),
-
-  status        VARCHAR(16) NOT NULL DEFAULT 'open',
-  -- 'open'       : seed commit envoyé, en attente de la mise (rare, peut être skip)
-  -- 'committed'  : mise locked, hash publié, en attente du flip
-  -- 'settled'    : résolu, payout fait
-
-  ts                    TIMESTAMP DEFAULT NOW(),
-  settled_at            TIMESTAMP NULL,
-  tx_hash_lock          VARCHAR(66) NULL,
-  tx_hash_payout        VARCHAR(66) NULL
-);
-CREATE INDEX idx_coinflip_user ON coinflip_rounds(username, ts DESC);
-```
-
-### 3.3 Flow
-
-```
-[user] POST /casino/coinflip/play  { bet, choice, client_seed }
-   │
-   ├─ Backend valide bet (min/max, balance suffisante)
-   ├─ Backend appelle randomness.commit('coinflip')  → seed_id + seed_hash
-   ├─ Backend lock bet via escrow → casino_bank (tx_hash_lock)
-   ├─ Backend appelle randomness.reveal(seed_id, client_seed) → seed + combined_hash
-   ├─ Backend calcule outcome = 'heads' if derive_int(combined, 2) == 0 else 'tails'
-   ├─ Si win: payout = bet * 2 * (1 - edge/100), release de casino_bank → user
-   ├─ Si lose: rien (les fonds restent dans casino_bank)
-   └─ Persiste tout (round + seed)
-
-Response: { id, outcome, win, payout, seed_hash, seed, client_seed, combined_hash, tx_hash_lock, tx_hash_payout }
-```
-
-Note : on commit *et* reveal dans la même requête HTTP. C'est moins pur cryptographiquement (l'utilisateur ne voit jamais `seed_hash` *avant* de miser), mais c'est ce que font la plupart des casinos provably fair en ligne pour la simplicité UX. Le user peut quand même vérifier a posteriori que `sha256(seed) == seed_hash`. Pour une version plus rigoureuse : 2 endpoints séparés (commit puis play), mais ça alourdit l'UX.
-
-### 3.4 Code
-
-```python
-# routers/coinflip.py
-@router.post("/casino/coinflip/play")
-def play_coinflip(body: CoinflipIn, user=Depends(current_user), db=Depends(get_db)):
-    if body.bet < CASINO["coinflip"]["min_bet"] or body.bet > CASINO["coinflip"]["max_bet"]:
-        raise HTTPException(400, "Mise hors limites")
-    if body.choice not in ("heads", "tails"):
-        raise HTTPException(400, "Choice doit être 'heads' ou 'tails'")
-
-    # Commit RNG seed
-    seed_hash, seed_id = randomness.commit(db, "coinflip")
-
-    # Lock
-    try:
-        tx_lock = escrow.lock(db, user, "casino_bank", body.bet,
-                              f"coinflip seed_id={seed_id}")
-    except EscrowError as e:
-        db.rollback(); raise HTTPException(400, str(e))
-
-    # Reveal + résolution
-    server_seed, combined = randomness.reveal(db, seed_id, body.client_seed)
-    outcome = "heads" if randomness.derive_int(combined, 2) == 0 else "tails"
-    win = (outcome == body.choice)
-
-    edge = CASINO["coinflip"]["edge_pct"] / 100
-    payout = int(body.bet * 2 * (1 - edge)) if win else 0
-    tx_payout = None
-    if win:
-        try:
-            tx_payout = escrow.release(db, "casino_bank", user, payout,
-                                       f"coinflip seed_id={seed_id} win")
-        except EscrowError as e:
-            # Catastrophe : on a pris la mise mais on peut pas payer le gain.
-            # On lève sans rollback pour que le lock reste, l'admin règle à la main.
-            raise HTTPException(500, f"Casino bank insuffisant pour payout: {e}")
-
-    round_ = CoinflipRound(
-        username=user.username, bet_amount=body.bet, choice=body.choice,
-        outcome=outcome, win=win, payout=payout,
-        client_seed=body.client_seed, rng_seed_id=seed_id,
-        status="settled", settled_at=datetime.utcnow(),
-        tx_hash_lock=tx_lock, tx_hash_payout=tx_payout,
-    )
-    db.add(round_); db.commit(); db.refresh(round_)
-
-    return {
-        "id": round_.id, "outcome": outcome, "win": win, "payout": payout,
-        "seed_hash": seed_hash, "server_seed": server_seed,
-        "client_seed": body.client_seed, "combined_hash": combined,
-        "tx_hash_lock": tx_lock, "tx_hash_payout": tx_payout,
-        "new_balance": get_balance_camp(user.address),
-    }
-```
-
-### 3.5 Front
-
-`CoinflipView.vue` : 
-- Bouton avec animation de pièce qui tourne (CSS 3D transform sur un div, 1.5s d'animation)
-- Slider/inputs pour la mise + raccourcis (10, 50, max)
-- Toggle pile/face
-- Bouton "Flip!" → POST → afficher résultat avec confettis si gain
-- Historique des 20 derniers flips en dessous (mini-table)
-- Accordéon "Vérifier le tirage" qui montre `seed_hash`, `server_seed`, formule
-
-Pas de framework nécessaire. ~250 lignes de Vue + CSS, faisable en un soir.
-
-### 3.6 Banque casino & monitoring
-
-Le `casino_bank` doit avoir un solde positif et géré. Ajouter :
-- Dashboard admin `/admin/casino` : solde casino_bank, P&L cumulé (par jeu), nombre de rounds par jour, RTP réel observé vs théorique
-- Alerte email si solde casino_bank < seuil (configurable, ex: 1000 CAMP)
-- Bouton "Recharger depuis treasury" qui fait `adminTransfer(treasury, casino_bank, X)`
-
----
-
-## 4. Module Casino — Roulette
-
-### 4.1 Concept
-
-Roulette européenne (1 zéro, 37 cases : 0, 1-36). Le user place une ou plusieurs mises sur des "spots" (numéro, rouge/noir, pair/impair, douzaines, etc.), un seul spin résout l'ensemble.
-
-L'edge est mécanique : payout d'un numéro plein = 35:1, mais probabilité de 1/37 → edge maison = 1/37 ≈ 2.7%. Pas besoin de configurer un edge artificiel comme pour le coinflip.
-
-### 4.2 Schéma DB
-
-Un spin = N mises agrégées, payout net.
-
-```sql
-CREATE TABLE roulette_spins (
-  id              SERIAL PRIMARY KEY,
-  username        VARCHAR(64) NOT NULL REFERENCES users(username),
-  total_bet       BIGINT NOT NULL,         -- somme des mises
-  total_payout    BIGINT NOT NULL DEFAULT 0,
-  net_pnl         BIGINT NOT NULL DEFAULT 0,  -- = total_payout - total_bet
-
-  bets_json       TEXT NOT NULL,           -- [{ "spot": "red", "amount": 10 }, ...]
-  outcome_number  INT NULL,                -- 0..36
-  outcome_color   VARCHAR(8) NULL,         -- 'red' | 'black' | 'green'
-
-  client_seed     VARCHAR(64) NOT NULL,
-  rng_seed_id     INT NOT NULL REFERENCES rng_seeds(id),
-
-  status          VARCHAR(16) NOT NULL DEFAULT 'settled',
-  ts              TIMESTAMP DEFAULT NOW(),
-  tx_hash_lock    VARCHAR(66) NULL,
-  tx_hash_payout  VARCHAR(66) NULL
-);
-CREATE INDEX idx_roulette_user ON roulette_spins(username, ts DESC);
-```
-
-### 4.3 Types de mises supportés (V1)
-
-| Spot | Format | Payout | Proba | Edge |
-|---|---|---|---|---|
-| Numéro plein | `"n=17"` | 35:1 | 1/37 | 2.7% |
-| Rouge / Noir | `"red"`, `"black"` | 1:1 | 18/37 | 2.7% |
-| Pair / Impair | `"even"`, `"odd"` | 1:1 | 18/37 | 2.7% |
-| Manque / Passe | `"low"` (1-18), `"high"` (19-36) | 1:1 | 18/37 | 2.7% |
-| Douzaines | `"dozen=1"` (1-12), `"dozen=2"`, `"dozen=3"` | 2:1 | 12/37 | 2.7% |
-| Colonnes | `"col=1"`, `"col=2"`, `"col=3"` | 2:1 | 12/37 | 2.7% |
-
-Tu peux ajouter splits/streets/corners en V2 si besoin.
-
-### 4.4 Logique de résolution
-
-```python
-# services/roulette.py
-RED_NUMBERS = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
-
-def number_color(n: int) -> str:
-    if n == 0: return "green"
-    return "red" if n in RED_NUMBERS else "black"
-
-def evaluate_bet(bet: dict, outcome: int) -> int:
-    """Retourne le payout (mise incluse) si gagnant, 0 sinon."""
-    spot, amount = bet["spot"], bet["amount"]
-    color = number_color(outcome)
-
-    if spot.startswith("n="):
-        return amount * 36 if int(spot[2:]) == outcome else 0
-    if spot == "red":  return amount * 2 if color == "red" else 0
-    if spot == "black": return amount * 2 if color == "black" else 0
-    if spot == "even": return amount * 2 if outcome != 0 and outcome % 2 == 0 else 0
-    if spot == "odd":  return amount * 2 if outcome % 2 == 1 else 0
-    if spot == "low":  return amount * 2 if 1 <= outcome <= 18 else 0
-    if spot == "high": return amount * 2 if 19 <= outcome <= 36 else 0
-    if spot.startswith("dozen="):
-        d = int(spot.split("=")[1])
-        return amount * 3 if outcome != 0 and (outcome - 1) // 12 == d - 1 else 0
-    if spot.startswith("col="):
-        c = int(spot.split("=")[1])
-        return amount * 3 if outcome != 0 and (outcome - 1) % 3 == c - 1 else 0
-    return 0
-```
-
-### 4.5 Flow on-chain : 1 mise + 1 payout net
-
-Pour éviter 1 tx par spot misé, on agrège : 1 lock = somme des mises, 1 release = payout total (ou 0).
-
-```python
-# routers/roulette.py
-@router.post("/casino/roulette/spin")
-def spin(body: RouletteIn, user=Depends(current_user), db=Depends(get_db)):
-    total_bet = sum(b["amount"] for b in body.bets)
-    if total_bet < CASINO["roulette"]["min_bet"]:
-        raise HTTPException(400, "Mise totale trop faible")
-    # ... validations spots ...
-
-    seed_hash, seed_id = randomness.commit(db, "roulette")
-    tx_lock = escrow.lock(db, user, "casino_bank", total_bet,
-                          f"roulette seed_id={seed_id}")
-
-    server_seed, combined = randomness.reveal(db, seed_id, body.client_seed)
-    outcome = randomness.derive_int(combined, 37)   # 0..36
-
-    total_payout = sum(evaluate_bet(b, outcome) for b in body.bets)
-
-    tx_payout = None
-    if total_payout > 0:
-        tx_payout = escrow.release(db, "casino_bank", user, total_payout,
-                                    f"roulette seed_id={seed_id}")
-
-    spin_ = RouletteSpin(
-        username=user.username, total_bet=total_bet, total_payout=total_payout,
-        net_pnl=total_payout - total_bet,
-        bets_json=json.dumps(body.bets),
-        outcome_number=outcome, outcome_color=number_color(outcome),
-        client_seed=body.client_seed, rng_seed_id=seed_id,
-        tx_hash_lock=tx_lock, tx_hash_payout=tx_payout,
-    )
-    db.add(spin_); db.commit(); db.refresh(spin_)
-    return {...}
-```
-
-### 4.6 Front : tapis + animation roue
-
-**Pas de framework Vue pour roulette mature aujourd'hui.** Options :
-
-1. **Composant maison** (recommandé) :
-   - Tapis = grille HTML/CSS classique (~100 lignes CSS pour reproduire le layout standard)
-   - Animation roue = SVG ou CSS keyframes (rotation avec `cubic-bezier`)
-   - Phaser/PixiJS overkill pour ça
-
-2. **`react-casino-roulette`** existe mais c'est React, ne convient pas.
-
-3. **HTML5 vanilla + wrapper Vue** : tu peux importer une lib JS comme [winwheel.js](https://github.com/zarocknz/javascript-winwheel) pour la roue et la wrapper dans un composant Vue. ~50 lignes de glue.
-
-Mon conseil : composant maison. Pour un casino "entre potes" avec 7 types de mises basiques, tu auras plus vite fini en codant à la main qu'en intégrant une lib. Animation roue avec CSS :
-
-```vue
-<div class="wheel" :style="{ transform: `rotate(${rotation}deg)`, transition: 'transform 4s cubic-bezier(.2,.8,.3,1)' }">
-  <!-- 37 spans positionnés en cercle, ou juste un SVG -->
-</div>
-```
-
-Mise à jour de `rotation` lorsque la réponse arrive : calculer l'angle final qui pointe vers `outcome_number`.
-
-### 4.7 Limites V1
-
-- 1 spin = 1 joueur (pas de multi-table avec plusieurs joueurs autour). Si tu veux du multi-joueur sur la même roue, c'est un mode "live" qui nécessite WebSockets + agenda fixe pour le spin (ex: spin toutes les 30s). À cibler en V2.
 
 ---
 
@@ -1291,11 +1020,11 @@ Pour les paris : un user peut spammer des paris ridicules pour bloquer son propr
 
 ### 8.5 Priorisation conseillée
 
-Ordre suggéré pour les modules restants (le module **Paris** est déjà livré, cf. `AGENTS.md`) :
+Modules déjà livrés (cf. `AGENTS.md`) : **Paris**, **Pile ou face**, **Roulette**.
 
-1. **Pile ou face** (§3) : permet de valider le pattern casino avec un jeu trivial. ~1-2 jours.
-2. **Bourse du lait** (§6) : le plus original conceptuellement, gameplay fort. ~5-7 jours.
-3. **Roulette** (§4) : techniquement proche du coinflip mais animation/UI plus lourdes. ~3-5 jours.
-4. **Poker** (§5) : très gros chantier, à attaquer en dernier et en bloc dédié. ~10-15 jours minimum si bien fait.
+Ordre suggéré pour les modules restants :
+
+1. **Bourse du lait** (§6) : le plus original conceptuellement, gameplay fort. ~5-7 jours.
+2. **Poker** (§5) : très gros chantier, à attaquer en bloc dédié. ~10-15 jours minimum si bien fait.
 
 Le pattern escrow + comptes système + RNG vérifiable (§1) reste un pré-requis transverse à mettre en place côté infra (en partie déjà fait pour Paris : `bets_escrow` créé, `services/escrow.py` réutilisable, migrations v4/v5 appliquées).

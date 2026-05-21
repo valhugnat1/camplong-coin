@@ -53,6 +53,12 @@ const routes = [
     meta: { needsUser: true },
   },
   {
+    path: "/casino/roulette",
+    name: "casino-roulette",
+    component: () => import("@/views/casino/RouletteView.vue"),
+    meta: { needsUser: true },
+  },
+  {
     path: "/milk",
     name: "milk",
     component: () => import("@/views/MilkView.vue"),

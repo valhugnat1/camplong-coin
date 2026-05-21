@@ -54,6 +54,16 @@ DEFAULT_SETTINGS = [
         "200",
         "Mise maximale autorisee sur un coinflip (en CAMP entiers).",
     ),
+    (
+        "roulette_min_bet",
+        "1",
+        "Mise minimale totale (somme des spots) sur un spin de roulette.",
+    ),
+    (
+        "roulette_max_bet",
+        "200",
+        "Mise maximale totale (somme des spots) sur un spin de roulette.",
+    ),
 ]
 
 

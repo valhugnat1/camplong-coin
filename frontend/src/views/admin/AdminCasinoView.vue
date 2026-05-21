@@ -13,19 +13,21 @@
     <div v-if="error" class="alert error">{{ error }}</div>
     <div v-if="successMsg" class="alert success">{{ successMsg }}</div>
 
-    <!-- ─── Settings éditables ─────────────────────────── -->
-    <section class="card settings-card">
-      <div class="card-header">
-        <h3 class="card-title">⚙️ Paramètres du coinflip</h3>
-        <button class="btn-ghost btn-sm" @click="loadAll" :disabled="loading">
-          {{ loading ? '…' : '↻ Rafraîchir' }}
-        </button>
-      </div>
-
+    <div class="page-toolbar">
+      <button class="btn-ghost btn-sm" @click="loadAll" :disabled="loading">
+        {{ loading ? '…' : '↻ Rafraîchir' }}
+      </button>
       <p class="card-explain dim">
         Les changements sont actifs <b>immédiatement</b> pour toutes les
         prochaines parties. Aucun redémarrage ni redéploiement nécessaire.
       </p>
+    </div>
+
+    <!-- ─── Settings Coinflip ──────────────────────────── -->
+    <section class="card settings-card">
+      <div class="card-header">
+        <h3 class="card-title">🪙 Paramètres du coinflip</h3>
+      </div>
 
       <div class="settings-grid">
         <!-- Edge maison -->
@@ -126,7 +128,76 @@
       </div>
     </section>
 
-    <!-- ─── Stats casino ───────────────────────────────── -->
+    <!-- ─── Settings Roulette ──────────────────────────── -->
+    <section class="card settings-card">
+      <div class="card-header">
+        <h3 class="card-title">🎡 Paramètres de la roulette</h3>
+      </div>
+      <p class="card-explain dim">
+        L'edge maison de la roulette est <b>mécanique</b> (1/37 ≈ <b>2.70%</b>) et
+        ne se configure pas — il est verrouillé par les règles du jeu européen.
+        Tu peux ajuster les limites de mise <b>totale</b> par spin.
+      </p>
+
+      <div class="settings-grid">
+        <article class="setting-tile">
+          <div class="setting-head">
+            <div class="s-key">Mise totale minimale</div>
+            <div class="s-current mono">{{ stats?.roulette?.min_bet ?? '—' }} CAMP</div>
+          </div>
+          <p class="s-desc">
+            Plancher pour la somme de toutes les mises d'un spin. Évite les
+            spins à 1 CAMP qui floodent l'historique.
+          </p>
+          <div class="s-edit">
+            <input
+              type="number"
+              step="1"
+              min="1"
+              v-model.number="edit.roulette_min_bet"
+              :disabled="saving.roulette_min_bet"
+            />
+            <button
+              class="btn-primary btn-sm"
+              :disabled="!canSave('roulette_min_bet') || saving.roulette_min_bet"
+              @click="save('roulette_min_bet')"
+            >
+              {{ saving.roulette_min_bet ? '…' : 'Sauver' }}
+            </button>
+          </div>
+        </article>
+
+        <article class="setting-tile">
+          <div class="setting-head">
+            <div class="s-key">Mise totale maximale</div>
+            <div class="s-current mono">{{ stats?.roulette?.max_bet ?? '—' }} CAMP</div>
+          </div>
+          <p class="s-desc">
+            Plafond agrégé. Un numéro plein gagnant à 35:1 paye <b>36×</b> la
+            mise — calcule en conséquence vs le solde de casino_bank.
+          </p>
+          <div class="s-edit">
+            <input
+              type="number"
+              step="1"
+              min="1"
+              v-model.number="edit.roulette_max_bet"
+              :disabled="saving.roulette_max_bet"
+            />
+            <button
+              class="btn-primary btn-sm"
+              :disabled="!canSave('roulette_max_bet') || saving.roulette_max_bet"
+              @click="save('roulette_max_bet')"
+            >
+              {{ saving.roulette_max_bet ? '…' : 'Sauver' }}
+            </button>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- ─── Stats globales casino ──────────────────────── -->
+    <h3 class="section-h">🪙 Coinflip — stats</h3>
     <section class="stats-grid" v-if="stats">
       <div class="stat-card">
         <div class="stat-k">Banque casino</div>
@@ -166,9 +237,9 @@
       </div>
     </section>
 
-    <!-- ─── Historique rounds ──────────────────────────── -->
+    <!-- ─── Historique rounds Coinflip ─────────────────── -->
     <section v-if="stats?.recent_rounds?.length" class="recent-section">
-      <h3 class="recent-title">📜 20 dernières parties</h3>
+      <h4 class="recent-title">📜 20 dernières parties coinflip</h4>
       <div class="table-wrap">
         <table class="admin-table">
           <thead>
@@ -215,6 +286,91 @@
         </table>
       </div>
     </section>
+
+    <!-- ─── Stats Roulette ─────────────────────────────── -->
+    <h3 class="section-h">🎡 Roulette — stats</h3>
+    <section class="stats-grid" v-if="stats?.roulette">
+      <div class="stat-card">
+        <div class="stat-k">PnL roulette</div>
+        <div class="stat-v mono" :class="{ positive: stats.roulette.pnl_camp >= 0, negative: stats.roulette.pnl_camp < 0 }">
+          {{ stats.roulette.pnl_camp >= 0 ? '+' : '' }}{{ formatNum(stats.roulette.pnl_camp) }}
+        </div>
+        <div class="stat-sub">CAMP cumulés</div>
+        <div class="stat-foot mono dim">
+          Volume misé : {{ formatNum(stats.roulette.volume_bet) }}
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-k">RTP observé</div>
+        <div class="stat-v mono">
+          {{ stats.roulette.rtp_observed_pct ?? '—' }}<span v-if="stats.roulette.rtp_observed_pct !== null">%</span>
+        </div>
+        <div class="stat-sub">
+          attendu : {{ (100 - stats.roulette.edge_mechanical_pct).toFixed(2) }}%
+        </div>
+        <div class="stat-foot mono dim">
+          {{ stats.roulette.spins_total }} spin{{ stats.roulette.spins_total > 1 ? 's' : '' }}
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-k">Edge mécanique</div>
+        <div class="stat-v mono">{{ stats.roulette.edge_mechanical_pct }}%</div>
+        <div class="stat-sub">1 / 37 cases</div>
+        <div class="stat-foot mono dim">verrouillé par les règles</div>
+      </div>
+    </section>
+
+    <!-- ─── Historique spins Roulette ──────────────────── -->
+    <section v-if="stats?.recent_spins?.length" class="recent-section">
+      <h4 class="recent-title">📜 20 derniers spins roulette</h4>
+      <div class="table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>User</th>
+              <th>Mises</th>
+              <th>Tirage</th>
+              <th class="ralign">Total misé</th>
+              <th class="ralign">Payout</th>
+              <th class="ralign">Net</th>
+              <th>Quand</th>
+              <th>Tx</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in stats.recent_spins" :key="r.id" :class="{ won: r.net_pnl > 0, lost: r.net_pnl < 0 }">
+              <td class="mono">#{{ r.id }}</td>
+              <td>{{ r.username }}</td>
+              <td class="mono dim">{{ r.bets?.length || 0 }} spot{{ (r.bets?.length || 0) > 1 ? 's' : '' }}</td>
+              <td>
+                <span class="num-pill" :class="r.outcome_color">{{ r.outcome_number }}</span>
+              </td>
+              <td class="ralign mono">{{ formatNum(r.total_bet) }}</td>
+              <td class="ralign mono">
+                <span :class="{ accent: r.total_payout > 0, dim: !r.total_payout }">
+                  {{ r.total_payout ? '+' + formatNum(r.total_payout) : '0' }}
+                </span>
+              </td>
+              <td class="ralign mono" :class="{ positive: r.net_pnl > 0, negative: r.net_pnl < 0 }">
+                {{ r.net_pnl > 0 ? '+' : '' }}{{ formatNum(r.net_pnl) }}
+              </td>
+              <td class="mono dim">{{ formatShort(r.ts) }}</td>
+              <td class="mono">
+                <a v-if="r.tx_hash_payout" :href="basescan(r.tx_hash_payout)" target="_blank" rel="noreferrer">
+                  payout↗
+                </a>
+                <a v-else-if="r.tx_hash_lock" :href="basescan(r.tx_hash_lock)" target="_blank" rel="noreferrer">
+                  lock↗
+                </a>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
   </main>
 </template>
 
@@ -240,11 +396,15 @@ const edit = reactive({
   coinflip_edge_pct: 2,
   coinflip_min_bet: 1,
   coinflip_max_bet: 200,
+  roulette_min_bet: 1,
+  roulette_max_bet: 200,
 })
 const saving = reactive({
   coinflip_edge_pct: false,
   coinflip_min_bet: false,
   coinflip_max_bet: false,
+  roulette_min_bet: false,
+  roulette_max_bet: false,
 })
 
 const bankLow = computed(() => {
@@ -291,6 +451,8 @@ function currentValue(key) {
   if (key === 'coinflip_edge_pct') return stats.value.coinflip.edge_configured_pct
   if (key === 'coinflip_min_bet') return stats.value.coinflip.min_bet
   if (key === 'coinflip_max_bet') return stats.value.coinflip.max_bet
+  if (key === 'roulette_min_bet') return stats.value.roulette?.min_bet
+  if (key === 'roulette_max_bet') return stats.value.roulette?.max_bet
   return null
 }
 
@@ -308,6 +470,10 @@ async function loadAll() {
     edit.coinflip_edge_pct = Number(s.coinflip.edge_configured_pct)
     edit.coinflip_min_bet = Number(s.coinflip.min_bet)
     edit.coinflip_max_bet = Number(s.coinflip.max_bet)
+    if (s.roulette) {
+      edit.roulette_min_bet = Number(s.roulette.min_bet)
+      edit.roulette_max_bet = Number(s.roulette.max_bet)
+    }
     ordersStore.load('all').catch(() => {})
   } catch (e) {
     error.value = e.message
@@ -335,9 +501,11 @@ async function save(key) {
 
 function labelOf(key) {
   return {
-    coinflip_edge_pct: 'Edge maison',
-    coinflip_min_bet: 'Mise minimale',
-    coinflip_max_bet: 'Mise maximale',
+    coinflip_edge_pct: 'Edge maison (coinflip)',
+    coinflip_min_bet: 'Mise minimale (coinflip)',
+    coinflip_max_bet: 'Mise maximale (coinflip)',
+    roulette_min_bet: 'Mise totale minimale (roulette)',
+    roulette_max_bet: 'Mise totale maximale (roulette)',
   }[key] || key
 }
 
@@ -524,6 +692,37 @@ onMounted(loadAll)
 }
 .outcome-pill.won { background: var(--green-soft); color: var(--green); }
 .outcome-pill.lost { background: var(--red-soft); color: var(--red); }
+
+.num-pill {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: 0.85em;
+  color: white;
+}
+.num-pill.red { background: #c4302b; }
+.num-pill.black { background: #1a1a1a; border: 1px solid #2a2a2a; }
+.num-pill.green { background: #0d8050; }
+
+.page-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 1em;
+  margin-bottom: 1em;
+}
+.page-toolbar .card-explain { margin: 0; }
+
+.section-h {
+  margin: 2em 0 0.8em 0;
+  font-size: 1.05em;
+  color: var(--text-1);
+  padding-top: 1em;
+  border-top: 1px dashed var(--border);
+}
 
 @media (max-width: 760px) {
   .settings-grid { grid-template-columns: 1fr; }

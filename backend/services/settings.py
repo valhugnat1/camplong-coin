@@ -21,9 +21,13 @@ from models import AppSetting
 # Defauts de secours si la cle n'est pas en DB (cas d'un setup incomplet).
 # Ces valeurs doivent correspondre au seed initial de migrate_v6_app_settings.py.
 DEFAULTS = {
+    # Coinflip
     "coinflip_edge_pct": "2",
     "coinflip_min_bet": "1",
     "coinflip_max_bet": "200",
+    # Roulette (edge mecanique 2.7%, donc pas d'edge_pct configurable)
+    "roulette_min_bet": "1",
+    "roulette_max_bet": "200",
 }
 
 # Cles autorisees pour PATCH /admin/settings. Toute autre cle est refusee

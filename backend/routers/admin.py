@@ -6,7 +6,7 @@ from eth_account import Account
 from jose import jwt
 
 from database import get_db
-from models import User, Transaction, MarketOrder, Bet, CoinflipRound
+from models import User, Transaction, MarketOrder, Bet, CoinflipRound, RouletteSpin
 from schemas import (
     AdminLoginIn, CreateUserIn, AmountIn, UpdateOrderIn, ResolveBetIn,
     SettingUpdateIn,
@@ -15,7 +15,7 @@ from security import require_admin, fernet
 from blockchain import admin_transfer, get_balance_camp, get_balance_eth, treasury
 from email_service import send_user_order_done, send_bet_resolved
 from config import ADMIN_PASSWORD, JWT_SECRET
-from services import escrow, coinflip
+from services import escrow, coinflip, roulette
 from services import settings as settings_svc
 from routers.bets import _bet_dict, _settle_resolved, BETS_ESCROW_ROLE, _user_email
 
@@ -570,20 +570,22 @@ def admin_update_setting(
             raise HTTPException(400, "edge_pct doit etre un nombre (ex: '2' ou '2.5')")
         if v < 0 or v >= 50:
             raise HTTPException(400, "edge_pct doit etre dans [0, 50[")
-    elif key in ("coinflip_min_bet", "coinflip_max_bet"):
+    elif key in ("coinflip_min_bet", "coinflip_max_bet",
+                 "roulette_min_bet", "roulette_max_bet"):
         try:
             v = int(value)
         except ValueError:
             raise HTTPException(400, f"{key} doit etre un entier")
         if v <= 0:
             raise HTTPException(400, f"{key} doit etre > 0")
-        # Coherence min <= max : on lit l'autre en DB
-        if key == "coinflip_min_bet":
-            cur_max = settings_svc.get_int(db, "coinflip_max_bet", 200)
+        # Coherence min <= max sur la meme famille (coinflip ou roulette)
+        family = "coinflip" if key.startswith("coinflip_") else "roulette"
+        if key.endswith("_min_bet"):
+            cur_max = settings_svc.get_int(db, f"{family}_max_bet", 200)
             if v > cur_max:
                 raise HTTPException(400, f"min_bet ({v}) > max_bet ({cur_max})")
         else:
-            cur_min = settings_svc.get_int(db, "coinflip_min_bet", 1)
+            cur_min = settings_svc.get_int(db, f"{family}_min_bet", 1)
             if v < cur_min:
                 raise HTTPException(400, f"max_bet ({v}) < min_bet ({cur_min})")
 
@@ -638,10 +640,29 @@ def admin_casino_stats(
     total_payout = int(pnl_row[1] or 0)
     pnl = total_bet - total_payout
 
-    # 20 dernieres rounds
+    # 20 dernieres rounds coinflip
     recent = (
         db.query(CoinflipRound)
           .order_by(CoinflipRound.ts.desc())
+          .limit(20)
+          .all()
+    )
+
+    # ─── Roulette stats
+    r_total_rounds = db.query(RouletteSpin).count()
+    r_pnl_row = (
+        db.query(
+            sqlfunc.coalesce(sqlfunc.sum(RouletteSpin.total_bet), 0),
+            sqlfunc.coalesce(sqlfunc.sum(RouletteSpin.total_payout), 0),
+        ).first()
+    )
+    r_total_bet = int(r_pnl_row[0] or 0)
+    r_total_payout = int(r_pnl_row[1] or 0)
+    r_pnl = r_total_bet - r_total_payout
+
+    r_recent = (
+        db.query(RouletteSpin)
+          .order_by(RouletteSpin.ts.desc())
           .limit(20)
           .all()
     )
@@ -664,5 +685,19 @@ def admin_casino_stats(
             "min_bet": settings_svc.get_int(db, "coinflip_min_bet", 1),
             "max_bet": settings_svc.get_int(db, "coinflip_max_bet", 200),
         },
+        "roulette": {
+            "spins_total": r_total_rounds,
+            "volume_bet": r_total_bet,
+            "volume_payout": r_total_payout,
+            "pnl_camp": r_pnl,
+            "rtp_observed_pct": (
+                round(100 * r_total_payout / r_total_bet, 2) if r_total_bet else None
+            ),
+            # Edge mecanique fixe (1/37). Pas configurable.
+            "edge_mechanical_pct": round(100 / 37, 2),
+            "min_bet": settings_svc.get_int(db, "roulette_min_bet", 1),
+            "max_bet": settings_svc.get_int(db, "roulette_max_bet", 200),
+        },
         "recent_rounds": [coinflip.history_dict(r) for r in recent],
+        "recent_spins": [roulette.history_dict(r) for r in r_recent],
     }

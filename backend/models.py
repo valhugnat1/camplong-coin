@@ -159,6 +159,38 @@ class RngSeed(Base):
     revealed_at = Column(DateTime, nullable=True)
 
 
+class RouletteSpin(Base):
+    """
+    Un spin de roulette europeenne (1 zero, 37 cases). Le user place
+    plusieurs mises sur des "spots" (numero, rouge/noir, douzaine...),
+    un seul tirage les resout toutes. On agrege en 1 lock + 1 payout
+    net pour ne pas exploser le nombre de tx on-chain.
+
+    L'edge est mecanique (2.7%) : payout numero plein = 35:1 mais proba
+    1/37. Pas de parametre 'edge_pct' a configurer.
+    """
+    __tablename__ = "roulette_spins"
+    __table_args__ = {"schema": DB_SCHEMA}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(64), nullable=False, index=True)
+    total_bet = Column(BigInteger, nullable=False)
+    total_payout = Column(BigInteger, nullable=False, default=0)
+    net_pnl = Column(BigInteger, nullable=False, default=0)
+
+    bets_json = Column(Text, nullable=False)        # JSON [{spot, amount}, ...]
+    outcome_number = Column(Integer, nullable=True)  # 0..36
+    outcome_color = Column(String(8), nullable=True)  # 'red' | 'black' | 'green'
+
+    client_seed = Column(String(128), nullable=False)
+    rng_seed_id = Column(Integer, nullable=False)
+
+    status = Column(String(16), nullable=False, default="settled")
+    ts = Column(DateTime, server_default=func.now(), nullable=False)
+    tx_hash_lock = Column(String(66), nullable=True)
+    tx_hash_payout = Column(String(66), nullable=True)
+
+
 class CoinflipRound(Base):
     """
     Une partie de pile/face. Settle dans la meme requete HTTP que le

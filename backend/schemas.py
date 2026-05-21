@@ -80,6 +80,16 @@ class CoinflipPlayIn(BaseModel):
     client_seed: str = Field(..., min_length=1, max_length=128)
 
 
+class RouletteBetIn(BaseModel):
+    spot: str = Field(..., min_length=1, max_length=16)
+    amount: int = Field(..., gt=0)
+
+
+class RouletteSpinIn(BaseModel):
+    bets: list[RouletteBetIn] = Field(..., min_length=1, max_length=50)
+    client_seed: str = Field(..., min_length=1, max_length=128)
+
+
 # ─── App settings (admin) ──────────────────────────────
 
 class SettingUpdateIn(BaseModel):

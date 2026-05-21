@@ -37,6 +37,28 @@ export const casinoApi = {
   myCoinflipHistory(token, limit = 20) {
     return apiCall(`/me/coinflip?limit=${limit}`, { token });
   },
+
+  // ─── Roulette ────────────────────────────────────────
+  rouletteConfig(token) {
+    return apiCall("/casino/roulette/config", { token });
+  },
+
+  /**
+   * Joue un spin avec N mises.
+   * @param {string} token
+   * @param {{bets: Array<{spot: string, amount: number}>, client_seed: string}} payload
+   */
+  rouletteSpin(token, payload) {
+    return apiCall("/casino/roulette/spin", {
+      method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    });
+  },
+
+  myRouletteHistory(token, limit = 20) {
+    return apiCall(`/me/roulette?limit=${limit}`, { token });
+  },
 };
 
 /**
