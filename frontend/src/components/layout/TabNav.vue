@@ -19,7 +19,7 @@
 const tabs = [
   { to: "/wallet", icon: "💼", label: "Wallet" },
   { to: "/paris", icon: "🎯", label: "Paris" },
-  { to: "/casino", icon: "🎰", label: "Casino", badge: "soon" },
+  { to: "/casino", icon: "🎰", label: "Casino" },
   { to: "/milk", icon: "🥛", label: "Bourse du Lait", badge: "soon" },
 ];
 </script>

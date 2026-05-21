@@ -1,9 +1,12 @@
 """
-models.py - Schemas SQL (users, transactions, nonces, market_orders, bets).
+models.py - Schemas SQL (users, transactions, nonces, market_orders,
+bets, app_settings, rng_seeds, coinflip_rounds).
 
 Chaque table est explicitement associee au schema DB_SCHEMA via __table_args__.
 """
-from sqlalchemy import Column, String, Integer, BigInteger, DateTime, Text, Float, func
+from sqlalchemy import (
+    Column, String, Integer, BigInteger, DateTime, Text, Float, Boolean, func,
+)
 from database import Base, DB_SCHEMA
 
 
@@ -118,3 +121,71 @@ class Bet(Base):
     tx_hash_lock_opponent = Column(String(66), nullable=True)
     tx_hash_payout_winner = Column(String(66), nullable=True)
     tx_hash_payout_arbiter = Column(String(66), nullable=True)
+
+
+class AppSetting(Base):
+    """
+    Parametres dynamiques modifiables depuis le backoffice (edge maison,
+    limites de mise, etc.). Key/value en VARCHAR : on parse cote service
+    selon le besoin (int, float, bool).
+    """
+    __tablename__ = "app_settings"
+    __table_args__ = {"schema": DB_SCHEMA}
+
+    key = Column(String(64), primary_key=True)
+    value = Column(String(256), nullable=False)
+    description = Column(Text, nullable=True)
+    updated_at = Column(DateTime, server_default=func.now(),
+                        onupdate=func.now(), nullable=False)
+
+
+class RngSeed(Base):
+    """
+    Commit-reveal pour les tirages aleatoires (coinflip, roulette, ...).
+    Le backend genere un secret + hash, publie le hash AVANT le tirage,
+    puis revele le secret APRES. Le user peut verifier sha256(secret) == hash.
+    """
+    __tablename__ = "rng_seeds"
+    __table_args__ = {"schema": DB_SCHEMA}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    purpose = Column(String(32), nullable=False)         # 'coinflip', 'roulette', ...
+    ref_id = Column(Integer, nullable=True)              # id de la round associee
+    seed_hash = Column(String(64), nullable=False)       # publie avant
+    seed_secret = Column(String(64), nullable=False)     # revele apres
+    revealed = Column(Boolean, nullable=False, default=False)
+    client_seed = Column(String(128), nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    revealed_at = Column(DateTime, nullable=True)
+
+
+class CoinflipRound(Base):
+    """
+    Une partie de pile/face. Settle dans la meme requete HTTP que le
+    play (commit + reveal en une seule fois pour simplifier l'UX).
+    """
+    __tablename__ = "coinflip_rounds"
+    __table_args__ = {"schema": DB_SCHEMA}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(64), nullable=False, index=True)
+    bet_amount = Column(BigInteger, nullable=False)
+    choice = Column(String(8), nullable=False)           # 'heads' | 'tails'
+    outcome = Column(String(8), nullable=True)
+    win = Column(Boolean, nullable=True)
+    payout = Column(BigInteger, nullable=False, default=0)
+
+    client_seed = Column(String(128), nullable=False)
+    rng_seed_id = Column(Integer, nullable=False)
+
+    # Edge applique sur cette round (snapshot au moment du tirage, en %),
+    # stocke comme float dans la note de transaction et utilise pour
+    # l'audit. La colonne n'existe pas dans la table v4 : on garde l'edge
+    # uniquement en memoire du compute. (Pas besoin de l'archiver, c'est
+    # deductible : payout / (2 * bet_amount) = 1 - edge/100.)
+
+    status = Column(String(16), nullable=False, default="committed")
+    ts = Column(DateTime, server_default=func.now(), nullable=False)
+    settled_at = Column(DateTime, nullable=True)
+    tx_hash_lock = Column(String(66), nullable=True)
+    tx_hash_payout = Column(String(66), nullable=True)

@@ -10,17 +10,25 @@
       </div>
 
       <div class="casino-grid">
-        <article v-for="(g, i) in games" :key="i" class="game-tile">
+        <component
+          v-for="(g, i) in games"
+          :key="i"
+          :is="g.to ? 'router-link' : 'article'"
+          :to="g.to"
+          class="game-tile"
+          :class="{ available: !!g.to }"
+        >
           <div>
             <div class="icon">{{ g.icon }}</div>
             <h3>{{ g.name }}</h3>
             <div class="desc">{{ g.desc }}</div>
           </div>
           <div class="game-footer">
-            <span class="coming-soon-badge">bientôt</span>
+            <span v-if="g.to" class="available-badge">jouable</span>
+            <span v-else class="coming-soon-badge">bientôt</span>
             <span class="mono">RTP {{ g.rtp }}%</span>
           </div>
-        </article>
+        </component>
       </div>
 
       <div class="card friend-tip">
@@ -37,11 +45,11 @@
 import AppLayout from '@/components/layout/AppLayout.vue'
 
 const games = [
+  { icon: '🪙', name: 'Coinflip',      desc: 'Pile ou face. Pas plus simple. Pas moins addictif.',    rtp: 98.0, to: '/casino/coinflip' },
   { icon: '🎰', name: 'Slots',         desc: '3 rouleaux, des emojis, du regret. Le classique.',      rtp: 96.2 },
   { icon: '🎡', name: 'Roulette',      desc: 'Rouge ou noir. Pair ou impair. Toi ou personne.',       rtp: 97.3 },
   { icon: '🃏', name: 'Poker (Texas)', desc: 'Bluffe tes potes. Ruine-toi en famille.',               rtp: 100  },
   { icon: '🎲', name: 'Dés',           desc: 'Tu mises sur un nombre. Ça tombe. Ou pas.',             rtp: 99.0 },
-  { icon: '🪙', name: 'Coinflip',      desc: 'Pile ou face. Pas plus simple. Pas moins addictif.',    rtp: 98.0 },
   { icon: '💥', name: 'Crash',         desc: 'La fusée décolle. Tu sors quand ? Spoiler : trop tard.', rtp: 99.0 }
 ]
 </script>
@@ -115,6 +123,36 @@ const games = [
 .game-tile:hover {
   transform: translateY(-2px);
   border-color: var(--border-strong);
+}
+.game-tile.available {
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+}
+.game-tile.available:hover {
+  border-color: var(--camp);
+  box-shadow: 0 12px 28px -16px var(--camp-glow);
+}
+.available-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  background: var(--green-soft);
+  color: var(--green);
+  padding: 0.3em 0.7em;
+  border-radius: 999px;
+  font-size: 0.72em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.available-badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
 }
 .game-tile .icon {
   font-size: 3em;

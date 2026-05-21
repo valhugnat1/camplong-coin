@@ -68,3 +68,19 @@ class CreateBetIn(BaseModel):
 
 class ResolveBetIn(BaseModel):
     resolution: Literal["yes", "no", "void"]
+
+
+# ─── Casino ────────────────────────────────────────────
+
+class CoinflipPlayIn(BaseModel):
+    bet: int = Field(..., gt=0)
+    choice: Literal["heads", "tails"]
+    # Contribution aleatoire cote client (le user tape n'importe quoi, on
+    # combine avec le secret serveur pour le tirage provably fair).
+    client_seed: str = Field(..., min_length=1, max_length=128)
+
+
+# ─── App settings (admin) ──────────────────────────────
+
+class SettingUpdateIn(BaseModel):
+    value: str = Field(..., min_length=1, max_length=256)

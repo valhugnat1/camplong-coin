@@ -30,6 +30,13 @@
         >
           🎲 Paris
         </router-link>
+        <router-link
+          to="/admin/casino"
+          class="nav-link"
+          :class="{ active: $route.path.startsWith('/admin/casino') }"
+        >
+          🪙 Casino
+        </router-link>
       </nav>
 
       <div class="spacer"></div>

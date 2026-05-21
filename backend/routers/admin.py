@@ -6,13 +6,17 @@ from eth_account import Account
 from jose import jwt
 
 from database import get_db
-from models import User, Transaction, MarketOrder, Bet
-from schemas import AdminLoginIn, CreateUserIn, AmountIn, UpdateOrderIn, ResolveBetIn
+from models import User, Transaction, MarketOrder, Bet, CoinflipRound
+from schemas import (
+    AdminLoginIn, CreateUserIn, AmountIn, UpdateOrderIn, ResolveBetIn,
+    SettingUpdateIn,
+)
 from security import require_admin, fernet
 from blockchain import admin_transfer, get_balance_camp, get_balance_eth, treasury
 from email_service import send_user_order_done, send_bet_resolved
 from config import ADMIN_PASSWORD, JWT_SECRET
-from services import escrow
+from services import escrow, coinflip
+from services import settings as settings_svc
 from routers.bets import _bet_dict, _settle_resolved, BETS_ESCROW_ROLE, _user_email
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -525,3 +529,140 @@ def admin_delete_bet(
     db.delete(bet)
     db.commit()
     return {"status": "deleted", "id": bet_id}
+
+
+# ─── App settings (parametres modifiables a chaud) ─────
+
+@router.get("/settings")
+def admin_list_settings(
+    _: bool = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Liste toutes les settings + leur description (lecture seule)."""
+    return settings_svc.list_all(db)
+
+
+@router.patch("/settings/{key}")
+def admin_update_setting(
+    key: str,
+    body: SettingUpdateIn,
+    _: bool = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Met a jour une setting. Le set de cles autorisees est blanchi cote
+    service pour eviter qu'un admin n'introduise des cles fantaisistes.
+    Validation par-cle pour les types numeriques + bornes raisonnables.
+    """
+    if key not in settings_svc.WRITABLE_KEYS:
+        raise HTTPException(
+            400,
+            f"Setting '{key}' inconnue. Cles autorisees : {sorted(settings_svc.WRITABLE_KEYS)}"
+        )
+
+    value = body.value.strip()
+
+    # ─── Validations par cle (defense en profondeur)
+    if key == "coinflip_edge_pct":
+        try:
+            v = float(value)
+        except ValueError:
+            raise HTTPException(400, "edge_pct doit etre un nombre (ex: '2' ou '2.5')")
+        if v < 0 or v >= 50:
+            raise HTTPException(400, "edge_pct doit etre dans [0, 50[")
+    elif key in ("coinflip_min_bet", "coinflip_max_bet"):
+        try:
+            v = int(value)
+        except ValueError:
+            raise HTTPException(400, f"{key} doit etre un entier")
+        if v <= 0:
+            raise HTTPException(400, f"{key} doit etre > 0")
+        # Coherence min <= max : on lit l'autre en DB
+        if key == "coinflip_min_bet":
+            cur_max = settings_svc.get_int(db, "coinflip_max_bet", 200)
+            if v > cur_max:
+                raise HTTPException(400, f"min_bet ({v}) > max_bet ({cur_max})")
+        else:
+            cur_min = settings_svc.get_int(db, "coinflip_min_bet", 1)
+            if v < cur_min:
+                raise HTTPException(400, f"max_bet ({v}) < min_bet ({cur_min})")
+
+    row = settings_svc.set_value(db, key, value)
+    db.commit()
+    db.refresh(row)
+    return {
+        "key": row.key,
+        "value": row.value,
+        "description": row.description,
+        "updated_at": row.updated_at.isoformat() + "Z" if row.updated_at else None,
+    }
+
+
+# ─── Casino stats (vue d'ensemble admin) ───────────────
+
+@router.get("/casino/stats")
+def admin_casino_stats(
+    _: bool = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Snapshot pour le dashboard admin casino :
+      - solde du compte systeme casino_bank
+      - nombre total de rounds + PnL casino cumule
+      - 20 dernieres rounds (toutes confondues, pour debug)
+      - parametres courants (edge, limites)
+
+    Le PnL casino = somme(bet_amount) - somme(payout) : positif si le casino
+    gagne globalement. Avec un edge de 2%, on attend ~+2% du volume mise.
+    """
+    # Compte systeme casino_bank (peut etre absent au tout debut)
+    try:
+        bank = escrow.get_system_account(db, coinflip.CASINO_BANK_ROLE)
+        bank_balance = get_balance_camp(bank.address)
+        bank_addr = bank.address
+    except escrow.EscrowError:
+        bank_balance = 0
+        bank_addr = None
+
+    total_rounds = db.query(CoinflipRound).count()
+
+    # PnL casino : agrega bet et payout en SQL pour ne pas tout charger
+    from sqlalchemy import func as sqlfunc
+    pnl_row = (
+        db.query(
+            sqlfunc.coalesce(sqlfunc.sum(CoinflipRound.bet_amount), 0),
+            sqlfunc.coalesce(sqlfunc.sum(CoinflipRound.payout), 0),
+        ).first()
+    )
+    total_bet = int(pnl_row[0] or 0)
+    total_payout = int(pnl_row[1] or 0)
+    pnl = total_bet - total_payout
+
+    # 20 dernieres rounds
+    recent = (
+        db.query(CoinflipRound)
+          .order_by(CoinflipRound.ts.desc())
+          .limit(20)
+          .all()
+    )
+
+    return {
+        "bank": {
+            "role": coinflip.CASINO_BANK_ROLE,
+            "address": bank_addr,
+            "balance_camp": bank_balance,
+        },
+        "coinflip": {
+            "rounds_total": total_rounds,
+            "volume_bet": total_bet,
+            "volume_payout": total_payout,
+            "pnl_camp": pnl,
+            "rtp_observed_pct": (
+                round(100 * total_payout / total_bet, 2) if total_bet else None
+            ),
+            "edge_configured_pct": settings_svc.get_float(db, "coinflip_edge_pct", 2.0),
+            "min_bet": settings_svc.get_int(db, "coinflip_min_bet", 1),
+            "max_bet": settings_svc.get_int(db, "coinflip_max_bet", 200),
+        },
+        "recent_rounds": [coinflip.history_dict(r) for r in recent],
+    }

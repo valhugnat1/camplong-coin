@@ -47,6 +47,12 @@ const routes = [
     meta: { needsUser: true },
   },
   {
+    path: "/casino/coinflip",
+    name: "casino-coinflip",
+    component: () => import("@/views/casino/CoinflipView.vue"),
+    meta: { needsUser: true },
+  },
+  {
     path: "/milk",
     name: "milk",
     component: () => import("@/views/MilkView.vue"),
@@ -100,6 +106,12 @@ const routes = [
     path: "/admin/bets",
     name: "admin-bets",
     component: () => import("@/views/admin/AdminBetsView.vue"),
+    meta: { needsAdmin: true },
+  },
+  {
+    path: "/admin/casino",
+    name: "admin-casino",
+    component: () => import("@/views/admin/AdminCasinoView.vue"),
     meta: { needsAdmin: true },
   },
 
