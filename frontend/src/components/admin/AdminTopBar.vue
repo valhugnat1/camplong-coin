@@ -8,12 +8,27 @@
       </router-link>
 
       <nav class="nav">
-        <router-link to="/admin" class="nav-link" :class="{ active: $route.path === '/admin' }">
+        <router-link
+          to="/admin"
+          class="nav-link"
+          :class="{ active: $route.path === '/admin' }"
+        >
           🏠 Vue d'ensemble
         </router-link>
-        <router-link to="/admin/orders" class="nav-link" :class="{ active: $route.path === '/admin/orders' }">
+        <router-link
+          to="/admin/orders"
+          class="nav-link"
+          :class="{ active: $route.path === '/admin/orders' }"
+        >
           📋 Demandes
           <span v-if="pendingCount > 0" class="badge">{{ pendingCount }}</span>
+        </router-link>
+        <router-link
+          to="/admin/bets"
+          class="nav-link"
+          :class="{ active: $route.path.startsWith('/admin/bets') }"
+        >
+          🎲 Paris
         </router-link>
       </nav>
 
@@ -29,19 +44,19 @@
 </template>
 
 <script setup>
-import { useRouter } from 'vue-router'
-import { useAuthStore } from '@/stores/auth'
+import { useRouter } from "vue-router";
+import { useAuthStore } from "@/stores/auth";
 
 defineProps({
-  pendingCount: { type: Number, default: 0 }
-})
+  pendingCount: { type: Number, default: 0 },
+});
 
-const router = useRouter()
-const auth = useAuthStore()
+const router = useRouter();
+const auth = useAuthStore();
 
 function logout() {
-  auth.logoutAdmin()
-  router.push({ name: 'admin-login' })
+  auth.logoutAdmin();
+  router.push({ name: "admin-login" });
 }
 </script>
 
@@ -72,9 +87,17 @@ function logout() {
   text-decoration: none;
   color: inherit;
 }
-.brand:hover { text-decoration: none; }
-.brand .logo-mark { width: 32px; height: 32px; font-size: 1em; }
-.brand .logo-text { font-size: 1.1em; }
+.brand:hover {
+  text-decoration: none;
+}
+.brand .logo-mark {
+  width: 32px;
+  height: 32px;
+  font-size: 1em;
+}
+.brand .logo-text {
+  font-size: 1.1em;
+}
 
 .admin-mark {
   background: linear-gradient(135deg, #ff4566 0%, #d12d4e 100%) !important;
@@ -106,7 +129,9 @@ function logout() {
   display: inline-flex;
   align-items: center;
   gap: 0.4em;
-  transition: color 0.15s, background 0.15s;
+  transition:
+    color 0.15s,
+    background 0.15s;
 }
 .nav-link:hover {
   color: var(--text-0);
@@ -129,14 +154,19 @@ function logout() {
   text-align: center;
 }
 
-.spacer { flex: 1; }
+.spacer {
+  flex: 1;
+}
 
 .link-back {
   color: var(--text-2);
   font-size: 0.85em;
   font-weight: 600;
 }
-.link-back:hover { color: var(--camp); text-decoration: none; }
+.link-back:hover {
+  color: var(--camp);
+  text-decoration: none;
+}
 
 .user-chip {
   display: flex;
@@ -149,7 +179,9 @@ function logout() {
   cursor: pointer;
   font-size: 0.85em;
 }
-.user-chip:hover { border-color: var(--border-strong); }
+.user-chip:hover {
+  border-color: var(--border-strong);
+}
 
 @media (max-width: 760px) {
   .admin-topbar-inner {
@@ -157,8 +189,15 @@ function logout() {
     flex-wrap: wrap;
     row-gap: 0.5em;
   }
-  .brand .logo-text { display: none; }
-  .link-back { display: none; }
-  .nav-link { padding: 0.4em 0.6em; font-size: 0.85em; }
+  .brand .logo-text {
+    display: none;
+  }
+  .link-back {
+    display: none;
+  }
+  .nav-link {
+    padding: 0.4em 0.6em;
+    font-size: 0.85em;
+  }
 }
 </style>
