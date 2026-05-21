@@ -1,6 +1,8 @@
-# EXTENSIONS.md — Modules paris, casino, bourse du lait
+# EXTENSIONS.md — Modules casino, bourse du lait
 
-Spec technique de l'extension de CamplongCoin avec trois grands modules de jeu : **Paris** (P2P avec arbitre optionnel), **Casino** (Pile ou Face, Roulette, Poker) et **Bourse du Lait** (AMM x·y=k). Ce document complète `AGENTS.md` et ne le remplace pas.
+Spec technique des modules **Casino** (Pile ou Face, Roulette, Poker) et **Bourse du Lait** (AMM x·y=k) — pas encore implémentés. Ce document complète `AGENTS.md` et ne le remplace pas.
+
+> Le module **Paris** a été déplacé dans `AGENTS.md` une fois livré — il n'est plus listé ici.
 
 > Lecture conseillée : `AGENTS.md` d'abord (architecture custodial, contrat, blockchain.py, schémas test/prod).
 
@@ -9,13 +11,15 @@ Spec technique de l'extension de CamplongCoin avec trois grands modules de jeu :
 ## Table des matières
 
 1. [Vue d'ensemble & refactoring global](#1-vue-densemble--refactoring-global)
-2. [Module Paris](#2-module-paris)
-3. [Module Casino — Pile ou Face](#3-module-casino--pile-ou-face)
-4. [Module Casino — Roulette](#4-module-casino--roulette)
-5. [Module Casino — Poker](#5-module-casino--poker)
-6. [Module Bourse du Lait](#6-module-bourse-du-lait)
-7. [Points d'attention](#7-points-dattention)
-8. [Améliorations & autres jeux possibles](#8-améliorations--autres-jeux-possibles)
+2. [Module Casino — Pile ou Face](#3-module-casino--pile-ou-face)
+3. [Module Casino — Roulette](#4-module-casino--roulette)
+4. [Module Casino — Poker](#5-module-casino--poker)
+5. [Module Bourse du Lait](#6-module-bourse-du-lait)
+6. [Points d'attention](#7-points-dattention)
+7. [Améliorations & autres jeux possibles](#8-améliorations--autres-jeux-possibles)
+
+> Les ancres des sections ci-dessous gardent leur numérotation d'origine (3 → 8) ;
+> seule la TOC a été renumérotée après le départ du module Paris.
 
 ---
 
@@ -320,286 +324,6 @@ treasury balance + system_account balances + sum(user balances) == total_supply 
 ```
 
 Si ça ne matche pas, il y a un bug quelque part. Ce check tourne aussi via un cron 1×/jour et alerte par email à l'admin si écart > 0.01 CAMP.
-
----
-
-## 2. Module Paris
-
-### 2.1 Concept
-
-Un user (le **creator**) crée un pari avec :
-- Une affirmation textuelle (`statement`)
-- Une catégorie (optionnel, pour le filtrage UI)
-- Une deadline (date limite de résolution)
-- Une mise creator (`stake_creator`) en CAMP
-- Une cote sous forme de fraction (`odds_num / odds_den`)
-- Un côté pris : `yes` ou `no`
-- Optionnel : un arbitre désigné + un % de commission (sinon résolution par l'admin)
-
-Un autre user (le **matcher**) peut prendre le pari en face. Sa mise (`stake_opponent`) est dérivée de la cote :
-
-```
-stake_opponent = stake_creator * odds_den / odds_num   si creator prend 'yes'
-                 (ou l'inverse selon la convention retenue)
-```
-
-Exemple : 20 CAMP que Emile dira "Je suis le Maire de camplong" cette semaine à cote 1 contre 3.
-- Creator (Hugo, côté `yes` que Emile va le dire) : mise 20 CAMP
-- Matcher (Alice, côté `no`) : mise 60 CAMP (3× la mise creator)
-- Pot total : 80 CAMP
-- Si Emile le dit, Hugo récupère les 80 CAMP. Sinon Alice.
-
-Avec arbitre + 5% de commission : le gagnant reçoit `pot * 0.95`, l'arbitre `pot * 0.05`.
-
-### 2.2 Convention de cotes
-
-Préférer le format **fractionnaire** (`num:den`) qui est ce que Hugo a écrit ("1 contre 3"). Calcul de la mise opposée :
-
-```
-Si tu mises X au côté A avec cote num:den
-  stake_opponent = X * den / num     # côté B doit miser ça
-  Gagnant côté A reçoit X + stake_opponent
-  Gagnant côté B reçoit X + stake_opponent (= les deux côtés ont la même attente de gain si la cote reflète la proba)
-```
-
-Validation : `stake_opponent` doit être un entier (sinon refuser la création — éviter les arrondis). Donc `(stake_creator * odds_den) % odds_num == 0`.
-
-### 2.3 Schéma DB
-
-```sql
-CREATE TABLE bets (
-  id                   SERIAL PRIMARY KEY,
-  creator_username     VARCHAR(64) NOT NULL REFERENCES users(username),
-  statement            VARCHAR(512) NOT NULL,
-  category             VARCHAR(32),
-  deadline             TIMESTAMP NOT NULL,
-
-  stake_creator        BIGINT NOT NULL,
-  stake_opponent       BIGINT NOT NULL,
-  odds_num             INT NOT NULL,
-  odds_den             INT NOT NULL,
-  creator_side         VARCHAR(8) NOT NULL,    -- 'yes' | 'no'
-
-  opponent_username    VARCHAR(64) NULL REFERENCES users(username),
-  arbiter_username     VARCHAR(64) NULL REFERENCES users(username),
-  arbiter_fee_pct      INT NOT NULL DEFAULT 0,
-
-  status               VARCHAR(16) NOT NULL DEFAULT 'open',
-  -- 'open'       : créé, en attente d'un matcher
-  -- 'matched'    : matcher trouvé, fonds bloqués des deux côtés
-  -- 'resolved'   : arbitre/admin a tranché, fonds redistribués
-  -- 'cancelled'  : creator a annulé avant matching (refund)
-  -- 'expired'    : deadline passée sans matcher ou sans résolution (refund both)
-
-  resolution           VARCHAR(8) NULL,        -- 'yes' | 'no' | 'void'
-  resolved_at          TIMESTAMP NULL,
-  resolved_by          VARCHAR(64) NULL,
-
-  created_at           TIMESTAMP DEFAULT NOW(),
-  matched_at           TIMESTAMP NULL,
-
-  tx_hash_lock_creator   VARCHAR(66) NULL,
-  tx_hash_lock_opponent  VARCHAR(66) NULL,
-  tx_hash_payout_winner  VARCHAR(66) NULL,
-  tx_hash_payout_arbiter VARCHAR(66) NULL
-);
-CREATE INDEX idx_bets_status ON bets(status);
-CREATE INDEX idx_bets_creator ON bets(creator_username);
-CREATE INDEX idx_bets_deadline ON bets(deadline);
-```
-
-### 2.4 Cycle de vie
-
-```
-[creator] POST /bets
-    │  (lock stake_creator → bets_escrow)
-    ▼
-  open ─────────────────────────────────────┐
-    │                                        │
-    │ [creator] DELETE /bets/{id}            │
-    │  (release stake_creator)               │
-    │                                        │
-    ▼                                        ▼
- cancelled                              [matcher] POST /bets/{id}/match
-                                            │  (lock stake_opponent → bets_escrow)
-                                            ▼
-                                         matched
-                                            │
-                                            │ [arbiter or admin] POST /bets/{id}/resolve
-                                            │  resolution=yes|no|void
-                                            │  if void: refund both
-                                            │  else:
-                                            │    payout to winner (pot - arbiter_fee)
-                                            │    payout to arbiter (if any)
-                                            ▼
-                                         resolved
-
-  open + deadline passé → cancelled (cron job)
-  matched + deadline + 7j → résolution forcée admin (sinon void + refund)
-```
-
-### 2.5 Endpoints
-
-```
-POST   /bets                      créer un pari (lock fonds creator)
-GET    /bets?status=open          liste des paris ouverts (visible par tous)
-GET    /bets/{id}                 détail d'un pari
-POST   /bets/{id}/match           prendre un pari (lock fonds matcher)
-DELETE /bets/{id}                 annuler son pari (uniquement si open)
-POST   /bets/{id}/resolve         (arbitre/admin) trancher
-GET    /me/bets                   mes paris (created, matched, arbitred)
-
-# Admin
-GET    /admin/bets                tous les paris, filtrable
-POST   /admin/bets/{id}/resolve   override de résolution
-POST   /admin/bets/{id}/cancel    force-cancel en cas de souci
-```
-
-### 2.6 Code clé : création + matching + résolution
-
-```python
-# routers/bets.py
-@router.post("/bets")
-def create_bet(body: CreateBetIn, user=Depends(current_user), db=Depends(get_db)):
-    # Validations
-    if body.stake_creator < BETS["min_stake"]:
-        raise HTTPException(400, "Mise trop faible")
-    if (body.stake_creator * body.odds_den) % body.odds_num != 0:
-        raise HTTPException(400, "Cote/mise produit un montant fractionnaire")
-    stake_opponent = body.stake_creator * body.odds_den // body.odds_num
-
-    bet = Bet(
-        creator_username=user.username,
-        statement=body.statement, category=body.category,
-        deadline=body.deadline,
-        stake_creator=body.stake_creator,
-        stake_opponent=stake_opponent,
-        odds_num=body.odds_num, odds_den=body.odds_den,
-        creator_side=body.creator_side,
-        arbiter_username=body.arbiter_username,
-        arbiter_fee_pct=body.arbiter_fee_pct or 0,
-        status="open",
-    )
-    db.add(bet); db.flush()
-
-    # Lock des fonds creator
-    try:
-        tx = escrow.lock(db, user, "bets_escrow", body.stake_creator,
-                         f"bet #{bet.id} stake creator")
-    except EscrowError as e:
-        db.rollback(); raise HTTPException(400, str(e))
-    bet.tx_hash_lock_creator = tx
-    db.commit()
-    return _bet_dict(bet)
-
-
-@router.post("/bets/{bet_id}/match")
-def match_bet(bet_id: int, user=Depends(current_user), db=Depends(get_db)):
-    bet = db.get(Bet, bet_id)
-    if not bet or bet.status != "open":
-        raise HTTPException(400, "Pari non disponible")
-    if bet.creator_username == user.username:
-        raise HTTPException(400, "Tu ne peux pas matcher ton propre pari")
-    if bet.deadline < datetime.utcnow():
-        raise HTTPException(400, "Deadline déjà passée")
-
-    try:
-        tx = escrow.lock(db, user, "bets_escrow", bet.stake_opponent,
-                         f"bet #{bet.id} stake opponent")
-    except EscrowError as e:
-        db.rollback(); raise HTTPException(400, str(e))
-
-    bet.opponent_username = user.username
-    bet.tx_hash_lock_opponent = tx
-    bet.status = "matched"
-    bet.matched_at = datetime.utcnow()
-    db.commit()
-    return _bet_dict(bet)
-
-
-@router.post("/bets/{bet_id}/resolve")
-def resolve_bet(bet_id: int, body: ResolveBetIn,
-                user=Depends(current_user), db=Depends(get_db)):
-    bet = db.get(Bet, bet_id)
-    if not bet: raise HTTPException(404)
-    if bet.status != "matched": raise HTTPException(400, "Pari non résolvable")
-    if bet.arbiter_username and user.username != bet.arbiter_username:
-        raise HTTPException(403, "Tu n'es pas l'arbitre désigné")
-    if not bet.arbiter_username:
-        # pas d'arbitre désigné → seuls admin peut trancher (autre endpoint)
-        raise HTTPException(403, "Aucun arbitre désigné, résolution admin requise")
-
-    pot = bet.stake_creator + bet.stake_opponent
-
-    if body.resolution == "void":
-        # Refund both
-        creator = db.get(User, bet.creator_username)
-        opponent = db.get(User, bet.opponent_username)
-        escrow.release(db, "bets_escrow", creator, bet.stake_creator,
-                       f"bet #{bet.id} refund (void)")
-        escrow.release(db, "bets_escrow", opponent, bet.stake_opponent,
-                       f"bet #{bet.id} refund (void)")
-    else:
-        winner_side = body.resolution    # 'yes' or 'no'
-        winner_username = (bet.creator_username
-                           if bet.creator_side == winner_side
-                           else bet.opponent_username)
-        winner = db.get(User, winner_username)
-
-        arbiter_fee = pot * bet.arbiter_fee_pct // 100
-        winner_payout = pot - arbiter_fee
-
-        tx_w = escrow.release(db, "bets_escrow", winner, winner_payout,
-                              f"bet #{bet.id} winner payout")
-        bet.tx_hash_payout_winner = tx_w
-
-        if arbiter_fee > 0:
-            arbiter = db.get(User, bet.arbiter_username)
-            tx_a = escrow.release(db, "bets_escrow", arbiter, arbiter_fee,
-                                  f"bet #{bet.id} arbiter fee")
-            bet.tx_hash_payout_arbiter = tx_a
-
-    bet.status = "resolved"
-    bet.resolution = body.resolution
-    bet.resolved_at = datetime.utcnow()
-    bet.resolved_by = user.username
-    db.commit()
-    return _bet_dict(bet)
-```
-
-### 2.7 Front
-
-Trois vues principales :
-- **`ParisListView.vue`** : reprend ton placeholder actuel (style Polymarket avec cards), mais branche sur `GET /bets?status=open`. Filtre par catégorie. Bouton "Créer un pari" en haut.
-- **`ParisCreateView.vue`** : formulaire — affirmation, catégorie, deadline (datepicker), mise creator, cote (deux inputs num/den), côté (toggle yes/no), arbitre (select dans annuaire, optionnel) + commission.
-- **`ParisDetailView.vue`** : détail + bouton "Prendre ce pari" (avec preview de la mise requise + gain potentiel) + bouton "Résoudre" si l'utilisateur courant est l'arbitre désigné.
-
-UI key : afficher en gros le **gain potentiel** pour les deux côtés, pas juste la mise. C'est ce que veulent voir les joueurs.
-
-### 2.8 Cron jobs
-
-Deux jobs APScheduler à lancer dans le backend :
-
-```python
-# backend/services/bets_cron.py
-@scheduler.scheduled_job("interval", minutes=10)
-def expire_unmatched_bets():
-    """Refund les paris 'open' dont la deadline est passée."""
-    now = datetime.utcnow()
-    with SessionLocal() as db:
-        for bet in db.query(Bet).filter(Bet.status == "open", Bet.deadline < now).all():
-            creator = db.get(User, bet.creator_username)
-            escrow.release(db, "bets_escrow", creator, bet.stake_creator,
-                           f"bet #{bet.id} refund (unmatched expired)")
-            bet.status = "expired"
-        db.commit()
-
-@scheduler.scheduled_job("interval", hours=6)
-def alert_overdue_matched_bets():
-    """Email admin pour les paris 'matched' dont la deadline + 24h est passée."""
-    # Pas d'action auto — résolution restera manuelle
-    ...
-```
 
 ---
 
@@ -1544,26 +1268,20 @@ Pour les paris : un user peut spammer des paris ridicules pour bloquer son propr
 | **Mines** (style Stake) | 2-3j | Grille N×N, M mines cachées. Mise + révèle cases progressivement. Payout multiplicateur monte à chaque case sûre. |
 | **Tour de Hanoï misé**, etc. | — | Aucune limite à l'imagination quand le pattern escrow est en place. |
 
-### 8.2 Évolutions du module Paris
-
-- **Paris à plusieurs branches** (pas juste yes/no, mais "Hugo finit 1er/2e/3e..."). Modèle = pari avec N options pondérées, chaque souscripteur choisit son option + son stake. Settlement = winner takes all (ou pro rata aux gagnants).
-- **Paris automatiques basés sur oracles externes** : "Le PSG bat l'OM dimanche". Un oracle (cron qui scrape un site sportif) ferme automatiquement. Pratique pour les paris à beaucoup de participants.
-- **Paris de marché ouvert** (style Polymarket vrai) : pas juste 1v1, mais order book avec ask/bid sur des shares "yes" / "no". Complexité +++, mais le placeholder Polymarket-like que tu as fait suggère que c'est la cible long terme.
-
-### 8.3 Évolutions du module Casino
+### 8.2 Évolutions du module Casino
 
 - **Tournois poker** : MTT avec elimination, classement final → prize pool.
 - **Casino "live"** : roulette commune où plusieurs joueurs misent sur le même spin (à intervalle fixe). Plus social.
 - **Programme de fidélité** : XP par CAMP misé, niveaux qui donnent des bonus (réduction d'edge, freebets).
 
-### 8.4 Évolutions de la bourse du lait
+### 8.3 Évolutions de la bourse du lait
 
 - **Plusieurs pools = paniers d'arbitrage** : si tu as LAIT-ENTIER et LAIT-DEMI, un user peut arb entre les deux. Lore : "fais ton fromage avec du lait entier".
 - **Liquidity providers** : actuellement seul l'admin amorce le pool. On peut autoriser les users à provisionner du CAMP+lait dans le pool (mint LP tokens) et toucher une part des fees. Très Uniswap.
 - **Événements scriptés** : pas juste un bot random, mais une "saison" avec une narrative (été = surproduction = prix bas, hiver = pénurie). Plus de gameplay, moins d'arbitraire.
 - **Marchés "futures"** : pari sur le prix du lait à T+30j. Recombine paris + bourse du lait, joli.
 
-### 8.5 Évolutions cross-module
+### 8.4 Évolutions cross-module
 
 - **Leaderboards** : classement global (P&L total) + par module. Vue dédiée. Compétitif.
 - **Achievements / badges** : "Premier sit-out positif au poker", "Plus de 1000 CAMP de fees lait payés", etc. Ne touche pas le CAMP mais ajoute du jeu.
@@ -1571,15 +1289,13 @@ Pour les paris : un user peut spammer des paris ridicules pour bloquer son propr
 - **Notifs push** : web push pour "ton pari a été matché", "tu es invité à une partie de poker", "famine en cours, vends ton lait !"
 - **Référent / parrainage** : si tu invites un pote, tu touches X% de ses fees pendant les 30 premiers jours.
 
-### 8.6 Priorisation conseillée
+### 8.5 Priorisation conseillée
 
-Ordre suggéré si tu démarres :
+Ordre suggéré pour les modules restants (le module **Paris** est déjà livré, cf. `AGENTS.md`) :
 
-1. **Refactoring infrastructure** (§1) : comptes système + service escrow + service RNG + Alembic + audit cron. ~3-5 jours. Permet tout le reste.
-2. **Paris** (§2) : haute valeur sociale, low-tech (pas de WS, pas d'animation lourde). ~4-6 jours.
-3. **Pile ou face** (§3) : permet de valider le pattern casino avec un jeu trivial. ~1-2 jours.
-4. **Bourse du lait** (§6) : le plus original conceptuellement, gameplay fort. ~5-7 jours.
-5. **Roulette** (§4) : techniquement proche du coinflip mais animation/UI plus lourdes. ~3-5 jours.
-6. **Poker** (§5) : très gros chantier, à attaquer en dernier et en bloc dédié. ~10-15 jours minimum si bien fait.
+1. **Pile ou face** (§3) : permet de valider le pattern casino avec un jeu trivial. ~1-2 jours.
+2. **Bourse du lait** (§6) : le plus original conceptuellement, gameplay fort. ~5-7 jours.
+3. **Roulette** (§4) : techniquement proche du coinflip mais animation/UI plus lourdes. ~3-5 jours.
+4. **Poker** (§5) : très gros chantier, à attaquer en dernier et en bloc dédié. ~10-15 jours minimum si bien fait.
 
-Total réaliste : 6-8 semaines à temps partiel pour tout livrer proprement. Si tu veux livrer vite, le combo {refactor + paris + coinflip + bourse du lait} en 2-3 semaines donne déjà 80% de la valeur, et tu attaques poker + roulette quand tu auras du temps après l'onboarding Mistral.
+Le pattern escrow + comptes système + RNG vérifiable (§1) reste un pré-requis transverse à mettre en place côté infra (en partie déjà fait pour Paris : `bets_escrow` créé, `services/escrow.py` réutilisable, migrations v4/v5 appliquées).

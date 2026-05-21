@@ -110,6 +110,14 @@ export const useBetsStore = defineStore("bets", () => {
     return bet;
   });
 
+  const vote = _withLoading(async (id, resolution) => {
+    const bet = await betsApi.vote(auth.userToken, id, resolution);
+    if (detail.value?.id === id) detail.value = bet;
+    // Si l'accord vient d'etre trouve, le payout a deja eu lieu → solde change.
+    if (bet.status === "resolved") await _refreshWallet();
+    return bet;
+  });
+
   // ─── Reset (utile au logout) ──────────────────────────
   function reset() {
     openBets.value = [];
@@ -137,6 +145,7 @@ export const useBetsStore = defineStore("bets", () => {
     match,
     cancel,
     resolve,
+    vote,
     reset,
   };
 });

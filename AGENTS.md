@@ -11,9 +11,10 @@ Document destiné aux développeurs (humains ou agents IA) qui veulent contribue
 3. [Base de données](#base-de-donnees)
 4. [Backend](#backend)
 5. [Frontend](#frontend)
-6. [Sécurité & secrets](#securite--secrets)
-7. [Déploiement](#deploiement)
-8. [Conventions & gotchas](#conventions--gotchas)
+6. [Module Paris (P2P bets)](#module-paris-p2p-bets)
+7. [Sécurité & secrets](#securite--secrets)
+8. [Déploiement](#deploiement)
+9. [Conventions & gotchas](#conventions--gotchas)
 
 ---
 
@@ -87,12 +88,15 @@ Le switch se fait via la variable `DB_SCHEMA` (lue dans `config.py`). Tout le co
 
 ```
 camplong (DB)
-├── schema: test       ├── users
+├── schema: test       ├── users           (user + comptes système)
 │                      ├── transactions
 │                      ├── nonces
-│                      └── market_orders
+│                      ├── market_orders
+│                      └── bets            (cf. § Module Paris)
 └── schema: prod       (mêmes tables)
 ```
+
+Les tables `rng_seeds`, `coinflip_rounds`, etc. sont préparées par `migrate_v4_extensions.py` mais ne sont pas encore exploitées (cf. `EXTENSIONS.md`).
 
 Garanties :
 - Le code applique `SET search_path TO "<schema>", public` à chaque nouvelle connexion (ceinture)
@@ -176,21 +180,24 @@ Workflow :
 ```
 backend/
 ├── main.py              # FastAPI app, CORS, mount des routers
-├── config.py            # lit .env, expose les constantes
+├── config.py            # lit .env, expose les constantes (incl. BETS)
 ├── database.py          # engine SQLAlchemy + session + search_path
-├── models.py            # 4 modèles SQLAlchemy
+├── models.py            # User, Transaction, Nonce, MarketOrder, Bet
 ├── schemas.py           # tous les Pydantic In/Out
 ├── security.py          # JWT decode, deps current_user / require_admin, Fernet
 ├── blockchain.py        # web3 init, helpers admin_transfer / balanceOf / nonce
-├── email_service.py     # SMTP best-effort, 2 fonctions de notif
+├── email_service.py     # SMTP best-effort (orders + bets notifs)
+├── services/
+│   └── escrow.py        # lock/release vers comptes système (cf. § Module Paris)
 ├── routers/
 │   ├── users.py         # /login, /me, /transfer, /history, /orders, /me/*
-│   └── admin.py         # /admin/login, /admin/users, /admin/credit|debit, /admin/orders
+│   ├── admin.py         # /admin/login, /admin/users, /admin/credit|debit,
+│   │                    # /admin/orders, /admin/bets/*
+│   └── bets.py          # /bets/*, /me/bets, vote/match/cancel/resolve
 └── scripts/
-    ├── init_db.py
-    ├── migrate_v2.py
-    ├── migrate_v3.py
-    └── ...
+    ├── migrate_v4_extensions.py   # tables paris/casino/lait + comptes système
+    ├── migrate_v5_bet_votes.py    # colonnes creator_vote / opponent_vote
+    └── seed_system_accounts.py    # crée bets_escrow, casino_bank, poker_bank
 ```
 
 ### Modules clés
@@ -362,6 +369,114 @@ Dans `api/client.js`, toute réponse HTTP 401 déclenche :
 3. Push vers le login correspondant avec `?redirect=<page courante>`
 
 Donc pas besoin de gérer le 401 dans chaque store/vue.
+
+---
+
+## Module Paris (P2P bets)
+
+Système de paris pair-à-pair sur une affirmation textuelle, avec deadline et résolution. Conserve le pattern custodial : aucun user ne signe quoi que ce soit, la treasury signe tous les mouvements via `adminTransfer`.
+
+### Cycle de vie d'un pari
+
+```
+[creator] POST /bets
+   │  (lock stake_creator → bets_escrow)
+   ▼
+ open ──[creator DELETE]──→ cancelled  (refund creator)
+   │
+   │ [opponent POST /bets/{id}/match]
+   │  (lock stake_opponent → bets_escrow)
+   ▼
+ matched ──→ resolved
+   ├── 1. Accord à deux : creator + opponent votent (POST /bets/{id}/vote)
+   │       Quand les votes coïncident → settlement auto,
+   │       resolved_by = '__both_players__'
+   ├── 2. Arbitre désigné : POST /bets/{id}/resolve par arbiter_username
+   └── 3. Admin override : POST /admin/bets/{id}/resolve (résout sans
+          contrainte d'arbitre, sert quand pas d'arbitre / désaccord
+          des votants), resolved_by = '__admin__'
+
+  → resolved : payout au gagnant (pot - arbiter_fee) + arbiter_fee si arbitre
+  → resolution = 'void' : refund intégral des deux côtés
+```
+
+L'ordre de priorité dans la UI : si tu es arbitre, la vue détail t'affiche le panneau "trancher" ; sinon (creator ou opponent), le panneau "voter pour valider l'issue".
+
+### Comptes système
+
+Les paris introduisent une notion de **compte système** dans `users` :
+- Nouvelle colonne `account_type VARCHAR(16) NOT NULL DEFAULT 'user'` (`'user'` | `'system'`)
+- Nouvelle colonne `system_role VARCHAR(64)` (ex: `'bets_escrow'`)
+- `password_hash` et `email` deviennent nullable (les comptes système n'en ont pas)
+- `/users` filtre `account_type = 'user'` pour ne pas exposer `bets_escrow` dans le dropdown arbitre
+
+La treasury, elle, reste en `.env` (pas dans `users`). Seuls les autres comptes système (`bets_escrow`, etc.) vont en DB. Création via `python scripts/seed_system_accounts.py` (génère wallet + chiffre la clé privée + insère la ligne).
+
+### Service `escrow`
+
+`backend/services/escrow.py` expose deux primitives réutilisables (pour les futurs modules casino/lait) :
+
+- `escrow.lock(db, user, role, amount, note)` : user → compte système. Vérifie le solde, appelle `admin_transfer`, journalise dans `transactions` (`from_username = user`, `to_username = '__<role>__'`).
+- `escrow.release(db, role, user, amount, note)` : compte système → user. Vérifie le solde du compte système, appelle `admin_transfer`, journalise.
+
+`EscrowError` est la classe d'exception métier ; les routers la convertissent en 400.
+
+**Pattern atomique** (à conserver pour les futurs modules) : la tx on-chain (`lock`/`release`) se fait *avant* tout changement de statut DB. Sur échec, la route fait `db.rollback()` et le pari reste dans son état précédent.
+
+### Schéma DB — `bets`
+
+Voir `backend/scripts/migrate_v4_extensions.py` (table) et `migrate_v5_bet_votes.py` (colonnes de vote). Champs clés :
+- `creator_username`, `opponent_username`, `arbiter_username` : 3 rôles, opponent et arbiter NULL tant que pas matché
+- `stake_creator`, `stake_opponent` : dérivés de la cote `odds_num / odds_den`. Validation : `(stake_creator * odds_den) % odds_num == 0` pour éviter les mises fractionnaires.
+- `creator_side` : `'yes'` | `'no'`
+- `status` : `'open'` | `'matched'` | `'resolved'` | `'cancelled'` | `'expired'`
+- `resolution`, `resolved_at`, `resolved_by` : remplis au settlement
+- `creator_vote`, `opponent_vote` : pour la résolution amiable à deux
+- 4 colonnes `tx_hash_*` pour tracer les 4 mouvements possibles (lock creator, lock opponent, payout winner, payout arbiter)
+
+### Endpoints
+
+| Méthode | Route                          | Auth   | Description                                                |
+|---------|--------------------------------|--------|------------------------------------------------------------|
+| POST    | `/bets`                        | user   | Créer un pari (lock fonds creator)                         |
+| GET     | `/bets?status=...&category=`   | user   | Liste filtrable                                            |
+| GET     | `/bets/{id}`                   | user   | Détail                                                     |
+| POST    | `/bets/{id}/match`             | user   | Prendre le pari (lock fonds opponent)                      |
+| DELETE  | `/bets/{id}`                   | user   | Annuler (creator only, status open uniquement)             |
+| POST    | `/bets/{id}/vote`              | user   | Voter sur l'issue (creator/opponent). Accord → settlement  |
+| POST    | `/bets/{id}/resolve`           | user   | Résolution arbitre (arbiter_username uniquement)           |
+| GET     | `/me/bets`                     | user   | Tous mes paris (avec champ `my_role`)                      |
+| GET     | `/admin/bets?status=...`       | admin  | Liste admin (tous statuts)                                 |
+| POST    | `/admin/bets/{id}/resolve`     | admin  | Force-resolve (sans contrainte arbitre)                    |
+| POST    | `/admin/bets/{id}/cancel`      | admin  | Force-cancel (refund creator + opponent si matched)        |
+| DELETE  | `/admin/bets/{id}`             | admin  | Suppression DB (refusé si `matched` / `resolved`)          |
+
+### Concurrence
+
+Match, cancel, resolve, vote font `SELECT ... FOR UPDATE` sur la ligne `bets` : si deux users matchent en même temps, le second voit `status != 'open'` et reçoit une erreur claire.
+
+### Notifications
+
+Best-effort, via `BackgroundTasks` :
+- Création avec arbitre désigné → email à l'arbitre
+- Match → email au creator
+- Résolution (arbitre, admin, ou accord) → email aux deux parties
+
+### À faire (non bloquant pour v1)
+
+- Cron 10 min : refund auto des paris `open` dont la deadline est passée → `expired`
+- Cron 6h : alerte admin sur les paris `matched` dont la deadline + 24h est dépassée sans résolution
+
+Tant que ces crons n'existent pas, l'admin peut faire `POST /admin/bets/{id}/cancel` à la main.
+
+### Front
+
+- `frontend/src/views/paris/{ParisListView, ParisCreateView, ParisDetailView}.vue`
+- `frontend/src/stores/bets.js` (Pinia, expose `fetchOpen`, `fetchMine`, `fetchDetail`, `create`, `match`, `cancel`, `resolve`, `vote`)
+- `frontend/src/api/bets.js` (wrapper REST)
+- `frontend/src/config.js` → `BETS = { minStake, maxStake, maxOpenBetsPerUser, arbiterDefaultFeePct }` (à garder en sync avec `backend/config.py::BETS`)
+
+Le username courant pour les vérifications de rôle (`isCreator`, `isOpponent`, `isArbiter`) se lit dans `wallet.me.username` — pas dans `auth` (qui n'expose que les tokens).
 
 ---
 

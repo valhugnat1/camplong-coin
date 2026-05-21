@@ -106,6 +106,11 @@ class Bet(Base):
     resolved_at = Column(DateTime, nullable=True)
     resolved_by = Column(String(64), nullable=True)
 
+    # Resolution amiable : si les deux votes coincident, le pari se resout
+    # sans arbitre ni admin. resolved_by = '__both_players__'.
+    creator_vote = Column(String(8), nullable=True)             # 'yes' | 'no' | 'void'
+    opponent_vote = Column(String(8), nullable=True)
+
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     matched_at = Column(DateTime, nullable=True)
 

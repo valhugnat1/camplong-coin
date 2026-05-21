@@ -44,6 +44,19 @@
             <div class="party-stake mono">
               {{ formatNum(bet.stake_creator) }} CAMP
             </div>
+            <div
+              v-if="showVotes && bet.creator_vote"
+              class="vote-badge"
+              :class="`vote-${bet.creator_vote}`"
+            >
+              Vote : {{ voteLabel(bet.creator_vote) }}
+            </div>
+            <div
+              v-else-if="showVotes"
+              class="vote-badge pending"
+            >
+              En attente de vote
+            </div>
           </article>
 
           <div class="vs-divider">
@@ -70,6 +83,19 @@
             <div v-else class="party-name empty">À prendre</div>
             <div class="party-stake mono">
               {{ formatNum(bet.stake_opponent) }} CAMP
+            </div>
+            <div
+              v-if="showVotes && bet.opponent_vote"
+              class="vote-badge"
+              :class="`vote-${bet.opponent_vote}`"
+            >
+              Vote : {{ voteLabel(bet.opponent_vote) }}
+            </div>
+            <div
+              v-else-if="showVotes"
+              class="vote-badge pending"
+            >
+              En attente de vote
             </div>
           </article>
         </section>
@@ -109,7 +135,7 @@
               </template>
             </div>
             <div class="resolved-sub mono">
-              Résolu par {{ bet.resolved_by }} ·
+              Résolu par {{ resolvedByLabel }} ·
               {{ formatFullDate(bet.resolved_at) }}
             </div>
             <div
@@ -204,6 +230,66 @@
               </button>
             </div>
           </div>
+
+          <!-- Cas 4 : matched, je suis creator ou opponent → vote amiable -->
+          <div v-else-if="canVote">
+            <p class="action-prompt">
+              <template v-if="!myVote">
+                Vote sur l'issue du pari. Si
+                <b>{{ theirName }}</b> vote pareil, le pari sera résolu
+                automatiquement, sans arbitre ni admin.
+              </template>
+              <template v-else-if="votesDisagree">
+                ⚠️ <b>Désaccord</b> : tu as voté
+                <b>{{ voteLabel(myVote) }}</b> et
+                <b>{{ theirName }}</b> a voté
+                <b>{{ voteLabel(theirVote) }}</b>. L'arbitre ou l'admin va
+                devoir trancher. Tu peux modifier ton vote ci-dessous.
+              </template>
+              <template v-else-if="!theirVote">
+                Ton vote (<b>{{ voteLabel(myVote) }}</b>) est enregistré.
+                On attend celui de <b>{{ theirName }}</b>. Tu peux le changer
+                tant qu'il n'a pas voté.
+              </template>
+            </p>
+            <div class="resolve-buttons">
+              <button
+                class="btn-resolve yes"
+                :class="{ selected: myVote === 'yes' }"
+                :disabled="acting"
+                @click="confirmVote('yes')"
+              >
+                <span class="big">✓</span>
+                <span>VRAI</span>
+                <span class="dim mono">
+                  {{ formatNum(yesWinnerGain) }} CAMP →
+                  {{ yesWinnerName }}
+                </span>
+              </button>
+              <button
+                class="btn-resolve no"
+                :class="{ selected: myVote === 'no' }"
+                :disabled="acting"
+                @click="confirmVote('no')"
+              >
+                <span class="big">✗</span>
+                <span>FAUX</span>
+                <span class="dim mono">
+                  {{ formatNum(noWinnerGain) }} CAMP → {{ noWinnerName }}
+                </span>
+              </button>
+              <button
+                class="btn-resolve void"
+                :class="{ selected: myVote === 'void' }"
+                :disabled="acting"
+                @click="confirmVote('void')"
+              >
+                <span class="big">○</span>
+                <span>NUL</span>
+                <span class="dim mono">Refund des deux côtés</span>
+              </button>
+            </div>
+          </div>
         </section>
 
         <!-- ─── Erreur d'action ────────────────────────── -->
@@ -270,14 +356,12 @@ import { useRoute, useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
 import AppLayout from "@/components/layout/AppLayout.vue";
 import BetStatusBadge from "@/components/bets/BetStatusBadge.vue";
-import { useAuthStore } from "@/stores/auth";
 import { useWalletStore } from "@/stores/wallet";
 import { useBetsStore } from "@/stores/bets";
 import { formatNum } from "@/config";
 
 const route = useRoute();
 const router = useRouter();
-const auth = useAuthStore();
 const wallet = useWalletStore();
 const betsStore = useBetsStore();
 const { detail: bet, loading, error } = storeToRefs(betsStore);
@@ -288,11 +372,11 @@ const acting = ref(false);
 const actionError = ref("");
 
 // ─── Computed : rôles + permissions ─────────────────────
-const isCreator = computed(() => bet.value?.creator_username === auth.username);
+const isCreator = computed(() => bet.value?.creator_username === wallet.me?.username);
 const isOpponent = computed(
-  () => bet.value?.opponent_username === auth.username,
+  () => bet.value?.opponent_username === wallet.me?.username,
 );
-const isArbiter = computed(() => bet.value?.arbiter_username === auth.username);
+const isArbiter = computed(() => bet.value?.arbiter_username === wallet.me?.username);
 
 const isPastDeadline = computed(
   () => bet.value && new Date(bet.value.deadline) < new Date(),
@@ -311,8 +395,46 @@ const canResolve = computed(
   () => bet.value?.status === "matched" && isArbiter.value,
 );
 
+const canVote = computed(
+  () =>
+    bet.value?.status === "matched" && (isCreator.value || isOpponent.value),
+);
+
 const hasActions = computed(
-  () => canMatch.value || canCancel.value || canResolve.value,
+  () =>
+    canMatch.value || canCancel.value || canResolve.value || canVote.value,
+);
+
+// ─── Votes amiables ──────────────────────────────────────
+const showVotes = computed(
+  () =>
+    bet.value?.status === "matched" &&
+    (bet.value?.creator_vote || bet.value?.opponent_vote),
+);
+
+const myVote = computed(() => {
+  if (!bet.value) return null;
+  if (isCreator.value) return bet.value.creator_vote;
+  if (isOpponent.value) return bet.value.opponent_vote;
+  return null;
+});
+
+const theirVote = computed(() => {
+  if (!bet.value) return null;
+  if (isCreator.value) return bet.value.opponent_vote;
+  if (isOpponent.value) return bet.value.creator_vote;
+  return null;
+});
+
+const theirName = computed(() => {
+  if (!bet.value) return "";
+  if (isCreator.value) return bet.value.opponent_username || "l'opposant";
+  if (isOpponent.value) return bet.value.creator_username;
+  return "";
+});
+
+const votesDisagree = computed(
+  () => !!myVote.value && !!theirVote.value && myVote.value !== theirVote.value,
 );
 
 const enoughBalance = computed(
@@ -425,6 +547,40 @@ async function confirmResolve(resolution) {
     acting.value = false;
   }
 }
+
+async function confirmVote(resolution) {
+  // Si l'autre a deja vote la meme chose, c'est un settlement immediat.
+  const willSettle = theirVote.value === resolution;
+  const labels = { yes: "VRAI", no: "FAUX", void: "NUL (annulation)" };
+  const msg = willSettle
+    ? `${theirName.value} a déjà voté ${labels[resolution]}. Ton vote va résoudre le pari et déclencher le payout. Continuer ?`
+    : `Voter ${labels[resolution]} ? Tu pourras le changer tant que ${theirName.value} n'a pas voté pareil.`;
+  if (!confirm(msg)) return;
+  acting.value = true;
+  actionError.value = "";
+  try {
+    await betsStore.vote(bet.value.id, resolution);
+  } catch (e) {
+    actionError.value = e.message;
+  } finally {
+    acting.value = false;
+  }
+}
+
+function voteLabel(v) {
+  if (v === "yes") return "VRAI";
+  if (v === "no") return "FAUX";
+  if (v === "void") return "NUL";
+  return "—";
+}
+
+const resolvedByLabel = computed(() => {
+  const r = bet.value?.resolved_by;
+  if (!r) return "";
+  if (r === "__both_players__") return "accord des deux joueurs";
+  if (r === "__admin__") return "admin";
+  return r;
+});
 
 // ─── Helpers ────────────────────────────────────────────
 function formatFullDate(iso) {
@@ -772,6 +928,51 @@ onMounted(async () => {
 }
 .btn-resolve.void .big {
   color: var(--text-2);
+}
+.btn-resolve.selected {
+  box-shadow: 0 0 0 3px rgba(154, 78, 255, 0.25);
+  border-color: var(--violet);
+}
+.btn-resolve.yes.selected {
+  border-color: var(--green);
+  background: rgba(20, 224, 142, 0.12);
+}
+.btn-resolve.no.selected {
+  border-color: var(--red);
+  background: rgba(255, 69, 102, 0.12);
+}
+
+/* ─── Badges de vote sur les cartes party ─────────────── */
+.vote-badge {
+  margin-top: 0.5em;
+  align-self: flex-start;
+  font-size: 0.72em;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 0.25em 0.6em;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-2);
+  text-transform: uppercase;
+}
+.vote-badge.vote-yes {
+  color: var(--green);
+  border-color: var(--green);
+  background: rgba(20, 224, 142, 0.1);
+}
+.vote-badge.vote-no {
+  color: var(--red);
+  border-color: var(--red);
+  background: rgba(255, 69, 102, 0.1);
+}
+.vote-badge.vote-void {
+  color: var(--text-1);
+  border-color: var(--text-2);
+}
+.vote-badge.pending {
+  font-style: italic;
+  color: var(--text-3);
 }
 
 /* ─── Meta ─────────────────────────────────────────── */

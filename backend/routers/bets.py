@@ -30,6 +30,7 @@ from config import BETS
 router = APIRouter(tags=["bets"])
 
 BETS_ESCROW_ROLE = "bets_escrow"
+BOTH_PLAYERS_RESOLVED_BY = "__both_players__"
 
 
 # ─── Serialisation ─────────────────────────────────────
@@ -56,6 +57,9 @@ def _bet_dict(b: Bet, my_role: Optional[str] = None) -> dict:
         "resolution": b.resolution,
         "resolved_at": b.resolved_at.isoformat() + "Z" if b.resolved_at else None,
         "resolved_by": b.resolved_by,
+
+        "creator_vote": b.creator_vote,
+        "opponent_vote": b.opponent_vote,
 
         "created_at": b.created_at.isoformat() + "Z" if b.created_at else None,
         "matched_at": b.matched_at.isoformat() + "Z" if b.matched_at else None,
@@ -384,6 +388,76 @@ def resolve_bet(
 
     try:
         _settle_resolved(db, bet, body.resolution, resolved_by=user.username)
+    except escrow.EscrowError as e:
+        db.rollback()
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Echec du settlement on-chain : {e}")
+
+    db.commit()
+    db.refresh(bet)
+
+    # Notifs : les deux parties
+    for u_name in (bet.creator_username, bet.opponent_username):
+        em = _user_email(db, u_name)
+        if em:
+            background_tasks.add_task(
+                send_bet_resolved, _bet_dict(bet), em, u_name,
+            )
+
+    return _bet_dict(bet)
+
+
+# ─── Vote (resolution amiable) ─────────────────────────
+
+@router.post("/bets/{bet_id}/vote")
+def vote_bet(
+    bet_id: int,
+    body: ResolveBetIn,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Vote du creator ou de l'opponent sur la resolution. Quand les deux votes
+    coincident, le pari est resolu automatiquement (resolved_by =
+    '__both_players__'), sans arbitre ni admin.
+
+    Un vote peut etre change tant que les deux votes ne coincident pas
+    (on ecrase le precedent). Si l'autre joueur a deja vote pareil, l'appel
+    declenche le settlement immediat dans la meme transaction.
+    """
+    bet = (
+        db.query(Bet)
+          .filter(Bet.id == bet_id)
+          .with_for_update()
+          .first()
+    )
+    if not bet:
+        raise HTTPException(404, "Pari introuvable")
+    if bet.status != "matched":
+        raise HTTPException(400, f"Pari non votable (statut: {bet.status})")
+    if user.username not in (bet.creator_username, bet.opponent_username):
+        raise HTTPException(403, "Seuls le createur et l'opposant peuvent voter")
+
+    is_creator = user.username == bet.creator_username
+    if is_creator:
+        bet.creator_vote = body.resolution
+    else:
+        bet.opponent_vote = body.resolution
+
+    # Si l'autre cote n'a pas encore vote OU vote different, on enregistre
+    # juste le vote et on attend / on signale le desaccord.
+    other_vote = bet.opponent_vote if is_creator else bet.creator_vote
+    if other_vote is None or other_vote != body.resolution:
+        db.commit()
+        db.refresh(bet)
+        return _bet_dict(bet)
+
+    # Accord → settlement immediat
+    try:
+        _settle_resolved(db, bet, body.resolution, resolved_by=BOTH_PLAYERS_RESOLVED_BY)
     except escrow.EscrowError as e:
         db.rollback()
         raise HTTPException(400, str(e))

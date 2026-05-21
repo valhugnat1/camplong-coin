@@ -57,6 +57,19 @@ export const betsApi = {
     });
   },
 
+  /**
+   * Vote du creator ou de l'opponent. Quand les deux votes coincident,
+   * le pari est resolu automatiquement (sans arbitre ni admin).
+   * @param {'yes'|'no'|'void'} resolution
+   */
+  vote(token, id, resolution) {
+    return apiCall(`/bets/${id}/vote`, {
+      method: "POST",
+      token,
+      body: JSON.stringify({ resolution }),
+    });
+  },
+
   mine(token) {
     return apiCall("/me/bets", { token });
   },

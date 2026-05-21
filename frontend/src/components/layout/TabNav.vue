@@ -17,11 +17,11 @@
 
 <script setup>
 const tabs = [
-  { to: '/wallet', icon: '💼', label: 'Wallet' },
-  { to: '/paris',  icon: '🎯', label: 'Paris',          badge: 'soon' },
-  { to: '/casino', icon: '🎰', label: 'Casino',         badge: 'soon' },
-  { to: '/milk',   icon: '🥛', label: 'Bourse du Lait', badge: 'soon' }
-]
+  { to: "/wallet", icon: "💼", label: "Wallet" },
+  { to: "/paris", icon: "🎯", label: "Paris" },
+  { to: "/casino", icon: "🎰", label: "Casino", badge: "soon" },
+  { to: "/milk", icon: "🥛", label: "Bourse du Lait", badge: "soon" },
+];
 </script>
 
 <style scoped>
@@ -35,7 +35,9 @@ const tabs = [
   overflow-x: auto;
   scrollbar-width: none;
 }
-.tabs::-webkit-scrollbar { display: none; }
+.tabs::-webkit-scrollbar {
+  display: none;
+}
 
 .tab {
   padding: 1em 1.1em;
@@ -52,10 +54,14 @@ const tabs = [
   gap: 0.5em;
   border-radius: 0;
 }
-.tab:hover { color: var(--text-0); }
-.tab.active { color: var(--text-0); }
+.tab:hover {
+  color: var(--text-0);
+}
+.tab.active {
+  color: var(--text-0);
+}
 .tab.active::after {
-  content: '';
+  content: "";
   position: absolute;
   bottom: -1px;
   left: 1.1em;
@@ -82,7 +88,12 @@ const tabs = [
 }
 
 @media (max-width: 640px) {
-  .tabs { padding: 0 0.5em; }
-  .tab { padding: 0.9em 0.8em; font-size: 0.88em; }
+  .tabs {
+    padding: 0 0.5em;
+  }
+  .tab {
+    padding: 0.9em 0.8em;
+    font-size: 0.88em;
+  }
 }
 </style>

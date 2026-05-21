@@ -173,15 +173,19 @@
             <span class="optional">optionnel</span>
           </div>
           <p class="hint">
-            Désigne un pote pour trancher si le résultat est ambigu. Sinon,
-            c'est moi (Hugo) qui tranche.
+            Par défaut, toi et l'opposant validez l'issue à deux : si vous
+            êtes d'accord, le pari se résout tout seul. Désigne un arbitre
+            seulement pour départager en cas de désaccord — sinon, c'est moi
+            (Hugo) qui tranche.
           </p>
 
           <div class="field-row">
             <label class="field">
               <span class="field-label">Qui</span>
               <select v-model="form.arbiter_username">
-                <option :value="null">— Personne (admin tranche) —</option>
+                <option :value="null">
+                  — Personne (accord à deux, sinon admin) —
+                </option>
                 <option
                   v-for="u in eligibleArbiters"
                   :key="u.username"
@@ -445,7 +449,9 @@ onMounted(async () => {
   // Annuaire pour le select arbitre
   try {
     const users = await apiCall("/users", { token: auth.userToken });
-    eligibleArbiters.value = users.filter((u) => u.username !== auth.username);
+    eligibleArbiters.value = users.filter(
+      (u) => u.username !== wallet.me?.username,
+    );
   } catch (e) {
     // pas bloquant
   }
