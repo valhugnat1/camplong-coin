@@ -1,3 +1,4 @@
+import datetime
 from typing import Literal, Optional
 from pydantic import BaseModel, EmailStr, Field
 
@@ -49,3 +50,21 @@ class CreateOrderIn(BaseModel):
     amount_eur: float = Field(..., gt=0)
     handle: str = ""               # obligatoire pour 'sell' (validé côté route)
     note: str = ""
+
+
+# ─── Bets ──────────────────────────────────────────────
+
+class CreateBetIn(BaseModel):
+    statement: str = Field(..., min_length=1, max_length=512)
+    category: Optional[str] = Field(None, max_length=32)
+    deadline: datetime.datetime
+    creator_side: Literal["yes", "no"]
+    stake_creator: int = Field(..., gt=0)
+    odds_num: int = Field(..., gt=0)
+    odds_den: int = Field(..., gt=0)
+    arbiter_username: Optional[str] = None
+    arbiter_fee_pct: int = Field(0, ge=0, le=50)
+
+
+class ResolveBetIn(BaseModel):
+    resolution: Literal["yes", "no", "void"]

@@ -95,7 +95,13 @@ def reveal_key(
 
 @router.get("/users")
 def list_users(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    others = db.query(User).filter(User.username != user.username).all()
+    """Annuaire des autres users humains. Exclut les comptes systeme (escrow, banque, ...)."""
+    others = (
+        db.query(User)
+          .filter(User.username != user.username)
+          .filter(User.account_type == "user")
+          .all()
+    )
     return [{"username": u.username} for u in others]
 
 

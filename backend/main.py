@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import admin, users
+from routers import admin, users, bets
 from config import CONTRACT_ADDRESS
 from database import DB_SCHEMA
 
@@ -16,6 +16,7 @@ router.add_middleware(
 
 router.include_router(admin.router)
 router.include_router(users.router)
+router.include_router(bets.router)
 
 @router.get("/")
 def root():

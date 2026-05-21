@@ -6,12 +6,14 @@ from eth_account import Account
 from jose import jwt
 
 from database import get_db
-from models import User, Transaction, MarketOrder
-from schemas import AdminLoginIn, CreateUserIn, AmountIn, UpdateOrderIn
+from models import User, Transaction, MarketOrder, Bet
+from schemas import AdminLoginIn, CreateUserIn, AmountIn, UpdateOrderIn, ResolveBetIn
 from security import require_admin, fernet
 from blockchain import admin_transfer, get_balance_camp, get_balance_eth, treasury
-from email_service import send_user_order_done
+from email_service import send_user_order_done, send_bet_resolved
 from config import ADMIN_PASSWORD, JWT_SECRET
+from services import escrow
+from routers.bets import _bet_dict, _settle_resolved, BETS_ESCROW_ROLE, _user_email
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -381,3 +383,145 @@ def delete_order(
     db.delete(order)
     db.commit()
     return {"status": "deleted", "id": order_id}
+
+
+# ─── Bets (admin) ──────────────────────────────────────
+
+ADMIN_RESOLVED_BY = "__admin__"
+
+
+@router.get("/bets")
+def admin_list_bets(
+    status: str = Query("all", pattern="^(all|open|matched|resolved|cancelled|expired)$"),
+    category: str | None = Query(None),
+    _: bool = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    q = db.query(Bet).order_by(Bet.created_at.desc())
+    if status != "all":
+        q = q.filter(Bet.status == status)
+    if category:
+        q = q.filter(Bet.category == category)
+    return [_bet_dict(b) for b in q.all()]
+
+
+@router.post("/bets/{bet_id}/resolve")
+def admin_resolve_bet(
+    bet_id: int,
+    body: ResolveBetIn,
+    background_tasks: BackgroundTasks,
+    _: bool = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Override de resolution : meme logique que /bets/{id}/resolve mais sans la
+    contrainte arbitre. Sert pour les paris sans arbitre designe ou les overrides.
+    """
+    bet = (
+        db.query(Bet)
+          .filter(Bet.id == bet_id)
+          .with_for_update()
+          .first()
+    )
+    if not bet:
+        raise HTTPException(404, "Pari introuvable")
+    if bet.status != "matched":
+        raise HTTPException(400, f"Pari non resolvable (statut: {bet.status})")
+
+    try:
+        _settle_resolved(db, bet, body.resolution, resolved_by=ADMIN_RESOLVED_BY)
+    except escrow.EscrowError as e:
+        db.rollback()
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Echec du settlement on-chain : {e}")
+
+    db.commit()
+    db.refresh(bet)
+
+    for u_name in (bet.creator_username, bet.opponent_username):
+        em = _user_email(db, u_name)
+        if em:
+            background_tasks.add_task(
+                send_bet_resolved, _bet_dict(bet), em, u_name,
+            )
+
+    return _bet_dict(bet)
+
+
+@router.post("/bets/{bet_id}/cancel")
+def admin_cancel_bet(
+    bet_id: int,
+    _: bool = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Force-cancel : refund creator (et opponent si matched).
+    Refus sur 'resolved' (les fonds sont deja distribues, irreversibles).
+    Sur 'cancelled' ou 'expired' : no-op.
+    """
+    bet = (
+        db.query(Bet)
+          .filter(Bet.id == bet_id)
+          .with_for_update()
+          .first()
+    )
+    if not bet:
+        raise HTTPException(404, "Pari introuvable")
+    if bet.status == "resolved":
+        raise HTTPException(400, "Pari deja resolu, fonds distribues - impossible d'annuler")
+    if bet.status in ("cancelled", "expired"):
+        return _bet_dict(bet)
+
+    creator = db.get(User, bet.creator_username)
+    opponent = db.get(User, bet.opponent_username) if bet.opponent_username else None
+
+    try:
+        if creator:
+            escrow.release(
+                db, BETS_ESCROW_ROLE, creator, bet.stake_creator,
+                f"bet #{bet.id} admin cancel refund (creator)",
+            )
+        if bet.status == "matched" and opponent:
+            escrow.release(
+                db, BETS_ESCROW_ROLE, opponent, bet.stake_opponent,
+                f"bet #{bet.id} admin cancel refund (opponent)",
+            )
+    except escrow.EscrowError as e:
+        db.rollback()
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Echec du refund on-chain : {e}")
+
+    bet.status = "cancelled"
+    bet.resolved_at = datetime.datetime.utcnow()
+    bet.resolved_by = ADMIN_RESOLVED_BY
+    db.commit()
+    db.refresh(bet)
+    return _bet_dict(bet)
+
+
+@router.delete("/bets/{bet_id}")
+def admin_delete_bet(
+    bet_id: int,
+    _: bool = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Suppression DB definitive. N'annule PAS les mouvements on-chain.
+    Refus sur 'matched' / 'resolved' (fonds escrowes ou distribues -
+    compromettrait l'audit). Force-cancel d'abord.
+    """
+    bet = db.get(Bet, bet_id)
+    if not bet:
+        raise HTTPException(404, "Pari introuvable")
+    if bet.status in ("matched", "resolved"):
+        raise HTTPException(
+            400,
+            f"Pari en statut '{bet.status}' : force-cancel d'abord (POST /admin/bets/{bet_id}/cancel)"
+        )
+    db.delete(bet)
+    db.commit()
+    return {"status": "deleted", "id": bet_id}

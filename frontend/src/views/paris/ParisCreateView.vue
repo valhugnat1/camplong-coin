@@ -287,13 +287,7 @@ const auth = useAuthStore();
 const wallet = useWalletStore();
 const betsStore = useBetsStore();
 
-// Acces tolerant au solde wallet : on essaie plusieurs noms de champ
-// possibles selon comment le store wallet est implemente. A remplacer
-// par un acces direct si tu connais le bon nom.
-const walletBalance = computed(() => {
-  const w = wallet;
-  return Number(w?.balance ?? w?.campBalance ?? w?.balance_camp ?? 0);
-});
+const walletBalance = computed(() => Number(wallet.me?.balance ?? 0));
 
 // ─── Constantes UI ──────────────────────────────────────
 const MIN_STAKE = 1;

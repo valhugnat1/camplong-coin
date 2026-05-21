@@ -1,5 +1,5 @@
 """
-models.py - Schemas SQL (4 tables : users, transactions, nonces, market_orders).
+models.py - Schemas SQL (users, transactions, nonces, market_orders, bets).
 
 Chaque table est explicitement associee au schema DB_SCHEMA via __table_args__.
 """
@@ -8,16 +8,21 @@ from database import Base, DB_SCHEMA
 
 
 class User(Base):
-    """Compte user. username = pseudo (ex: 'Hugo'). email = facultatif."""
+    """
+    Compte user OU compte systeme (account_type='system', ex: bets_escrow).
+    Les comptes systeme n'ont pas de password_hash ni d'email.
+    """
     __tablename__ = "users"
     __table_args__ = {"schema": DB_SCHEMA}
 
     username = Column(String(64), primary_key=True)
-    password_hash = Column(String(128), nullable=False)
+    password_hash = Column(String(128), nullable=True)
     address = Column(String(42), nullable=False, unique=True)   # 0x + 40 hex
     encrypted_private_key = Column(Text, nullable=False)
     email = Column(String(256), nullable=True)                  # pour les notifs
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    account_type = Column(String(16), nullable=False, default="user")  # 'user' | 'system'
+    system_role = Column(String(64), nullable=True)             # ex: 'bets_escrow'
 
 
 class Transaction(Base):
@@ -68,3 +73,43 @@ class MarketOrder(Base):
     admin_note = Column(String(512), default="")        # note admin
     done_at = Column(DateTime, nullable=True)
     tx_hash = Column(String(66), nullable=True)          # tx du mouvement on-chain (si done)
+
+
+class Bet(Base):
+    """
+    Pari P2P avec arbitre optionnel. Creator pose la mise + la cote ;
+    un autre user (opponent) prend le pari en face. Resolution par l'arbitre
+    designe ou l'admin. Fonds escrowes dans le compte systeme 'bets_escrow'.
+    """
+    __tablename__ = "bets"
+    __table_args__ = {"schema": DB_SCHEMA}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    creator_username = Column(String(64), nullable=False, index=True)
+    statement = Column(String(512), nullable=False)
+    category = Column(String(32), nullable=True)
+    deadline = Column(DateTime, nullable=False)
+
+    stake_creator = Column(BigInteger, nullable=False)
+    stake_opponent = Column(BigInteger, nullable=False)
+    odds_num = Column(Integer, nullable=False)
+    odds_den = Column(Integer, nullable=False)
+    creator_side = Column(String(8), nullable=False)            # 'yes' | 'no'
+
+    opponent_username = Column(String(64), nullable=True, index=True)
+    arbiter_username = Column(String(64), nullable=True, index=True)
+    arbiter_fee_pct = Column(Integer, nullable=False, default=0)
+
+    # 'open' | 'matched' | 'resolved' | 'cancelled' | 'expired'
+    status = Column(String(16), nullable=False, default="open", index=True)
+    resolution = Column(String(8), nullable=True)               # 'yes' | 'no' | 'void'
+    resolved_at = Column(DateTime, nullable=True)
+    resolved_by = Column(String(64), nullable=True)
+
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    matched_at = Column(DateTime, nullable=True)
+
+    tx_hash_lock_creator = Column(String(66), nullable=True)
+    tx_hash_lock_opponent = Column(String(66), nullable=True)
+    tx_hash_payout_winner = Column(String(66), nullable=True)
+    tx_hash_payout_arbiter = Column(String(66), nullable=True)

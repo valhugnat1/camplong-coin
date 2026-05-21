@@ -30,3 +30,12 @@ ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "hugo.philipp99@gmail.com")
 
 # URL publique du front (pour les liens dans les emails)
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:8080")
+
+# ─── Bets (paris P2P) ──────────────────────────────────
+# Doit rester en sync avec frontend/src/config.js BETS.
+BETS = {
+    "min_stake": 1,
+    "max_stake": 1000,
+    "max_open_bets_per_user": 10,
+    "arbiter_default_fee_pct": 5,
+}

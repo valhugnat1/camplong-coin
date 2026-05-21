@@ -85,6 +85,78 @@ def send_admin_new_order(order: dict, user_email: Optional[str]) -> None:
     _send(ADMIN_EMAIL, subject, body)
 
 
+def send_bet_arbiter_assigned(bet: dict, arbiter_email: str) -> None:
+    """Previent un arbitre qu'il a ete designe pour trancher un pari."""
+    subject = f"[CamplongCoin] On t'a designe arbitre - pari #{bet['id']}"
+    body = (
+        f"Salut,\n\n"
+        f"{bet['creator_username']} t'a designe arbitre pour ce pari :\n\n"
+        f"  \"{bet['statement']}\"\n\n"
+        f"  Pari #{bet['id']}\n"
+        f"  Mise creator   : {bet['stake_creator']} CAMP ({bet['creator_side'].upper()})\n"
+        f"  Mise opponent  : {bet['stake_opponent']} CAMP\n"
+        f"  Commission     : {bet['arbiter_fee_pct']}% du pot\n"
+        f"  Deadline       : {bet['deadline']}\n\n"
+        f"Tu pourras trancher quand un opposant aura matche le pari.\n\n"
+        f"Voir le pari :\n  {FRONTEND_URL}/paris/{bet['id']}\n\n"
+        f"--\nCamplongCoin (notif auto)\n"
+    )
+    _send(arbiter_email, subject, body)
+
+
+def send_bet_matched(bet: dict, creator_email: str, matcher_username: str) -> None:
+    """Previent le creator que quelqu'un a pris son pari."""
+    subject = f"[CamplongCoin] {matcher_username} a pris ton pari #{bet['id']}"
+    body = (
+        f"Salut {bet['creator_username']},\n\n"
+        f"{matcher_username} vient de prendre ton pari :\n\n"
+        f"  \"{bet['statement']}\"\n\n"
+        f"  Pot total   : {bet['stake_creator'] + bet['stake_opponent']} CAMP\n"
+        f"  Ton cote    : {bet['creator_side'].upper()}\n"
+        f"  Deadline    : {bet['deadline']}\n"
+        f"  Arbitre     : {bet['arbiter_username'] or '(admin)'}\n\n"
+        f"Voir le pari :\n  {FRONTEND_URL}/paris/{bet['id']}\n\n"
+        f"--\nCamplongCoin (notif auto)\n"
+    )
+    _send(creator_email, subject, body)
+
+
+def send_bet_resolved(bet: dict, user_email: str, username: str) -> None:
+    """Notifie un participant qu'un pari a ete resolu."""
+    res = bet["resolution"]
+    pot = bet["stake_creator"] + bet["stake_opponent"]
+
+    if res == "void":
+        outcome = "Le pari a ete annule (void). Ta mise t'a ete remboursee."
+    else:
+        winner = (
+            bet["creator_username"]
+            if bet["creator_side"] == res
+            else bet["opponent_username"]
+        )
+        if winner == username:
+            outcome = (
+                f"Tu as GAGNE ! Resolution: {res.upper()}, "
+                f"pot {pot} CAMP, payout sur ton wallet."
+            )
+        else:
+            outcome = (
+                f"Tu as perdu. Resolution: {res.upper()}, "
+                f"le pot ({pot} CAMP) est alle a {winner}."
+            )
+
+    subject = f"[CamplongCoin] Pari #{bet['id']} resolu"
+    body = (
+        f"Salut {username},\n\n"
+        f"Le pari \"{bet['statement']}\" vient d'etre resolu par "
+        f"{bet['resolved_by']}.\n\n"
+        f"{outcome}\n\n"
+        f"Voir le pari :\n  {FRONTEND_URL}/paris/{bet['id']}\n\n"
+        f"--\nCamplongCoin (notif auto)\n"
+    )
+    _send(user_email, subject, body)
+
+
 def send_user_order_done(order: dict, user_email: str) -> None:
     """Confirme au user que sa demande a ete traitee par l'admin."""
     type_label = "achat" if order["type"] == "buy" else "vente"

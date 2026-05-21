@@ -282,12 +282,7 @@ const wallet = useWalletStore();
 const betsStore = useBetsStore();
 const { detail: bet, loading, error } = storeToRefs(betsStore);
 
-// Acces tolerant au solde wallet
-const walletBalance = computed(() => {
-  return Number(
-    wallet?.balance ?? wallet?.campBalance ?? wallet?.balance_camp ?? 0,
-  );
-});
+const walletBalance = computed(() => Number(wallet.me?.balance ?? 0));
 
 const acting = ref(false);
 const actionError = ref("");
