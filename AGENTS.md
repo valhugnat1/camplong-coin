@@ -94,6 +94,9 @@ camplong (DB)
 │                      ├── nonces
 │                      ├── market_orders
 │                      ├── bets                (cf. § Module Paris)
+│                      ├── bet_options         (cf. § Module Paris)
+│                      ├── bet_participations  (cf. § Module Paris)
+│                      ├── bet_votes           (cf. § Module Paris)
 │                      ├── app_settings        (clés/valeurs admin-tweakables)
 │                      ├── rng_seeds           (commit-reveal provably fair)
 │                      ├── coinflip_rounds     (cf. § Module Casino)
@@ -215,10 +218,11 @@ Voir § *Module Casino* pour le détail des flows.
 ### Migrations
 
 `scripts/init_db.py` crée les tables au premier setup. Migrations successives (idempotentes, multi-schémas) :
-- `migrate_v4_extensions.py` : tables paris + casino + poker + milk + `rng_seeds` + colonnes `account_type` / `system_role` sur users.
-- `migrate_v5_bet_votes.py` : colonnes `creator_vote` / `opponent_vote` sur `bets` pour la résolution amiable.
+- `migrate_v4_extensions.py` : tables paris (v1) + casino + poker + milk + `rng_seeds` + colonnes `account_type` / `system_role` sur users.
+- `migrate_v5_bet_votes.py` : colonnes `creator_vote` / `opponent_vote` sur `bets` v1 (obsolète après v8).
 - `migrate_v6_app_settings.py` : table `app_settings` + seed des paramètres casino par défaut (`coinflip_edge_pct=2`, `coinflip_min_bet=1`, `coinflip_max_bet=200`, `roulette_min_bet=1`, `roulette_max_bet=200`).
 - `migrate_v7_slots.py` : table `slots_spins` + seed `slots_min_bet=1`, `slots_max_bet=100`.
+- `migrate_v8_bets_v2.py` : **refonte complète des paris**. DROP de l'ancienne table `bets` (les paris non résolus doivent être refundés manuellement AVANT, le script les liste). Recrée `bets` avec son nouveau schéma + crée `bet_options`, `bet_participations`, `bet_votes`. Voir § *Module Paris*.
 
 Chaque script s'applique aux deux schémas par défaut (`test`, puis `prod`) et est ré-exécutable sans effet de bord (CREATE IF NOT EXISTS, ON CONFLICT DO NOTHING, etc.). Lancer ensuite `seed_system_accounts.py` après v4 pour créer les wallets de `casino_bank`, `bets_escrow`, `poker_bank`, `milk_pool_lait_entier`.
 
@@ -467,35 +471,48 @@ Donc pas besoin de gérer le 401 dans chaque store/vue.
 
 ---
 
-## Module Paris (P2P bets)
+## Module Paris (communautaires)
 
-Système de paris pair-à-pair sur une affirmation textuelle, avec deadline et résolution. Conserve le pattern custodial : aucun user ne signe quoi que ce soit, la treasury signe tous les mouvements via `adminTransfer`.
+Système de paris communautaires sur une affirmation textuelle, avec deadline et résolution. Conserve le pattern custodial : aucun user ne signe quoi que ce soit, la treasury signe tous les mouvements via `adminTransfer`.
+
+**Refonte (mai 2026)** : l'ancien modèle 1v1 (creator/opponent + cote `odds_num:odds_den` + side yes/no) a été abandonné. Le nouveau modèle :
+
+- **Mise unique fixe** définie par le créateur (`bet.stake`). Tout participant pose exactement ce montant pour rejoindre.
+- **2 à 6 options** par pari : soit `type='yes_no'` (Oui/Non auto-créés), soit `type='multi_choice'` (libellés custom).
+- **Le créateur peut participer ou non**. S'il participe, c'est juste comme n'importe quel autre participant — il bloque sa mise en même temps que la création.
+- **N participants par option**, 1 mise max par user par pari (UNIQUE(bet_id, username) sur `bet_participations`).
+- **Résolution** : (a) arbitre désigné, (b) 2 votes communautaires concordants (n'importe quel user, 1 vote/pari, modifiable), ou (c) admin override.
+- **Payout** : pot total réparti à parts égales entre les participants de l'option gagnante (`floor(pot / nb_gagnants)`, le reste de division reste dans `bets_escrow` — négligeable, c'est de la poussière).
+- **Solo bet** : si une seule option a des participants au moment de la résolution, le pari est forcé en `void` (refund de tous). Personne ne "gagne tout seul".
 
 ### Cycle de vie d'un pari
 
 ```
 [creator] POST /bets
-   │  (lock stake_creator → bets_escrow)
+   │  (si creator participe : lock stake → bets_escrow,
+   │   row inseree dans bet_participations)
    ▼
- open ──[creator DELETE]──→ cancelled  (refund creator)
+ open ──[creator DELETE]──→ cancelled
+   │      (refund de tous les participants, status=cancelled, void=true)
    │
-   │ [opponent POST /bets/{id}/match]
-   │  (lock stake_opponent → bets_escrow)
+   │ [anyone POST /bets/{id}/join {option_id}]
+   │  (lock stake → bets_escrow, row dans bet_participations)
    ▼
- matched ──→ resolved
-   ├── 1. Accord à deux : creator + opponent votent (POST /bets/{id}/vote)
-   │       Quand les votes coïncident → settlement auto,
-   │       resolved_by = '__both_players__'
-   ├── 2. Arbitre désigné : POST /bets/{id}/resolve par arbiter_username
-   └── 3. Admin override : POST /admin/bets/{id}/resolve (résout sans
-          contrainte d'arbitre, sert quand pas d'arbitre / désaccord
-          des votants), resolved_by = '__admin__'
+ open + N participants ──→ resolved via :
+   ├── 1. Arbitre :         POST /bets/{id}/resolve {option_id}
+   │                         par arbiter_username (option_id=null → void)
+   ├── 2. Communauté :      POST /bets/{id}/vote {option_id} par
+   │                         n'importe quel user ; quand 2 votes pointent
+   │                         vers la même option_id (ou tous les 2 vers
+   │                         null=void) → settlement auto,
+   │                         resolved_by='__community__'
+   └── 3. Admin override :  POST /admin/bets/{bet_id}/resolve {option_id}
+                             (sans contrainte arbitre), resolved_by='__admin__'
 
-  → resolved : payout au gagnant (pot - arbiter_fee) + arbiter_fee si arbitre
-  → resolution = 'void' : refund intégral des deux côtés
+  → resolved : payout = floor(pot_total / nb_winners) pour chaque
+                participant de l'option gagnante.
+  → resolution_void = true : refund intégral de tous les participants.
 ```
-
-L'ordre de priorité dans la UI : si tu es arbitre, la vue détail t'affiche le panneau "trancher" ; sinon (creator ou opponent), le panneau "voter pour valider l'issue".
 
 ### Comptes système
 
@@ -518,60 +535,82 @@ La treasury, elle, reste en `.env` (pas dans `users`). Seuls les autres comptes 
 
 **Pattern atomique** (à conserver pour les futurs modules) : la tx on-chain (`lock`/`release`) se fait *avant* tout changement de statut DB. Sur échec, la route fait `db.rollback()` et le pari reste dans son état précédent.
 
-### Schéma DB — `bets`
+### Schéma DB (tables paris)
 
-Voir `backend/scripts/migrate_v4_extensions.py` (table) et `migrate_v5_bet_votes.py` (colonnes de vote). Champs clés :
-- `creator_username`, `opponent_username`, `arbiter_username` : 3 rôles, opponent et arbiter NULL tant que pas matché
-- `stake_creator`, `stake_opponent` : dérivés de la cote `odds_num / odds_den`. Validation : `(stake_creator * odds_den) % odds_num == 0` pour éviter les mises fractionnaires.
-- `creator_side` : `'yes'` | `'no'`
-- `status` : `'open'` | `'matched'` | `'resolved'` | `'cancelled'` | `'expired'`
-- `resolution`, `resolved_at`, `resolved_by` : remplis au settlement
-- `creator_vote`, `opponent_vote` : pour la résolution amiable à deux
-- 4 colonnes `tx_hash_*` pour tracer les 4 mouvements possibles (lock creator, lock opponent, payout winner, payout arbiter)
+Quatre tables, créées par `backend/scripts/migrate_v8_bets_v2.py` (qui DROP l'ancienne table `bets` avant recreate).
+
+**`bets`** — métadonnées du pari :
+- `id`, `creator_username`, `statement`, `deadline`
+- `type` : `'yes_no'` | `'multi_choice'`
+- `stake` (BIGINT) : mise unique fixe pour tous les participants
+- `arbiter_username` (nullable)
+- `status` : `'open'` | `'resolved'` | `'cancelled'` | `'expired'`
+- `resolution_option_id` (FK `bet_options.id`, NULL si void ou pas encore résolu)
+- `resolution_void` (BOOLEAN) : true si résolu en void (refund tous)
+- `resolved_at`, `resolved_by` (sentinels possibles : `__community__`, `__admin__`, `__expired__`, ou un username)
+- `created_at`
+
+**`bet_options`** — 2 à 6 options par pari :
+- `id`, `bet_id` (FK `bets.id` ON DELETE CASCADE), `label`, `position`
+
+**`bet_participations`** — qui a misé quoi sur quelle option :
+- `id`, `bet_id`, `option_id`, `username`, `amount`
+- `tx_hash_lock` (lock du stake), `tx_hash_payout` (payout / refund)
+- `joined_at`
+- UNIQUE `(bet_id, username)` : un user n'a qu'une participation par pari
+
+**`bet_votes`** — votes communautaires pour la résolution :
+- `id`, `bet_id`, `voter_username`, `option_id` (NULL = vote pour `void`)
+- `voted_at`
+- UNIQUE `(bet_id, voter_username)` : un user n'a qu'un vote (modifiable)
+
+Le payout = `floor(pot_total / nb_winners)`. Le reste de division (< nb_winners CAMP) reste dans `bets_escrow` comme poussière. À nettoyer périodiquement à la main via debit admin si ça s'accumule.
 
 ### Endpoints
 
 | Méthode | Route                          | Auth   | Description                                                |
 |---------|--------------------------------|--------|------------------------------------------------------------|
-| POST    | `/bets`                        | user   | Créer un pari (lock fonds creator)                         |
-| GET     | `/bets?status=...&category=`   | user   | Liste filtrable                                            |
-| GET     | `/bets/{id}`                   | user   | Détail                                                     |
-| POST    | `/bets/{id}/match`             | user   | Prendre le pari (lock fonds opponent)                      |
-| DELETE  | `/bets/{id}`                   | user   | Annuler (creator only, status open uniquement)             |
-| POST    | `/bets/{id}/vote`              | user   | Voter sur l'issue (creator/opponent). Accord → settlement  |
-| POST    | `/bets/{id}/resolve`           | user   | Résolution arbitre (arbiter_username uniquement)           |
-| GET     | `/me/bets`                     | user   | Tous mes paris (avec champ `my_role`)                      |
-| GET     | `/admin/bets?status=...`       | admin  | Liste admin (tous statuts)                                 |
-| POST    | `/admin/bets/{id}/resolve`     | admin  | Force-resolve (sans contrainte arbitre)                    |
-| POST    | `/admin/bets/{id}/cancel`      | admin  | Force-cancel (refund creator + opponent si matched)        |
-| DELETE  | `/admin/bets/{id}`             | admin  | Suppression DB (refusé si `matched` / `resolved`)          |
+| POST    | `/bets`                        | user   | Créer un pari (+ lock du creator s'il participe)           |
+| GET     | `/bets?status=...`             | user   | Liste filtrable (avec `my_role` sur chaque ligne)          |
+| GET     | `/bets/{id}`                   | user   | Détail (options, participants, votes)                      |
+| POST    | `/bets/{id}/join`              | user   | Rejoindre sur une `option_id` (lock du stake)              |
+| DELETE  | `/bets/{id}`                   | user   | Annuler (creator only, refund tous si participants)        |
+| POST    | `/bets/{id}/vote`              | user   | Vote communautaire `{option_id}` (NULL=void). 2 voix → settle |
+| POST    | `/bets/{id}/resolve`           | user   | Résolution arbitre `{option_id}` (NULL=void)               |
+| GET     | `/me/bets`                     | user   | Tous mes paris (creator / arbitre / participant)           |
+| GET     | `/admin/bets?status=...`       | admin  | Liste admin                                                |
+| POST    | `/admin/bets/{id}/resolve`     | admin  | Force-resolve `{option_id}` (NULL=void)                    |
+| POST    | `/admin/bets/{id}/cancel`      | admin  | Force-cancel (refund tous les participants)                |
+| DELETE  | `/admin/bets/{id}`             | admin  | Suppression DB (refusé si `resolved` ou `open` avec participants) |
 
 ### Concurrence
 
-Match, cancel, resolve, vote font `SELECT ... FOR UPDATE` sur la ligne `bets` : si deux users matchent en même temps, le second voit `status != 'open'` et reçoit une erreur claire.
+Join, cancel, resolve, vote font `SELECT ... FOR UPDATE` sur la ligne `bets` : si deux users joignent en même temps, ils sont sérialisés et le UNIQUE(bet_id, username) garantit qu'on ne peut pas miser 2 fois.
 
 ### Notifications
 
 Best-effort, via `BackgroundTasks` :
 - Création avec arbitre désigné → email à l'arbitre
-- Match → email au creator
-- Résolution (arbitre, admin, ou accord) → email aux deux parties
+- Quelqu'un rejoint → email au créateur (sauf s'il est le joiner)
+- Résolution (arbitre, communauté, admin) → email à tous les participants avec leur résultat individuel
 
 ### À faire (non bloquant pour v1)
 
-- Cron 10 min : refund auto des paris `open` dont la deadline est passée → `expired`
-- Cron 6h : alerte admin sur les paris `matched` dont la deadline + 24h est dépassée sans résolution
+- Cron 10 min : void auto + refund des paris `open` dont la deadline est passée → `expired`
+- Cron 6h : alerte admin sur les paris `open` dont la deadline + 24h est dépassée sans résolution
 
 Tant que ces crons n'existent pas, l'admin peut faire `POST /admin/bets/{id}/cancel` à la main.
 
 ### Front
 
 - `frontend/src/views/paris/{ParisListView, ParisCreateView, ParisDetailView}.vue`
-- `frontend/src/stores/bets.js` (Pinia, expose `fetchOpen`, `fetchMine`, `fetchDetail`, `create`, `match`, `cancel`, `resolve`, `vote`)
+- `frontend/src/stores/bets.js` (Pinia, expose `fetchOpen`, `fetchMine`, `fetchDetail`, `create`, `join`, `cancel`, `resolve`, `vote`)
 - `frontend/src/api/bets.js` (wrapper REST)
-- `frontend/src/config.js` → `BETS = { minStake, maxStake, maxOpenBetsPerUser, arbiterDefaultFeePct }` (à garder en sync avec `backend/config.py::BETS`)
+- `frontend/src/config.js` → `BETS = { minStake, maxStake, maxOpenBetsPerUser, minOptions, maxOptions }` (à garder en sync avec `backend/config.py::BETS`)
 
-Le username courant pour les vérifications de rôle (`isCreator`, `isOpponent`, `isArbiter`) se lit dans `wallet.me.username` — pas dans `auth` (qui n'expose que les tokens).
+Le username courant pour les vérifications de rôle (`isCreator`, `isArbiter`, `isParticipant`) se lit dans `wallet.me.username` — pas dans `auth` (qui n'expose que les tokens). Le backend renseigne aussi `my_role`, `my_option_id`, `my_vote_option_id`, `my_has_voted` directement dans les responses.
+
+La vue détail affiche les barres de participation par option (largeur ∝ nombre de participants), et `commit-after-action` n'est pas nécessaire ici (pas d'animation à attendre).
 
 ---
 

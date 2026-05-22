@@ -8,7 +8,6 @@
       </p>
     </div>
 
-    <!-- Bandeau demandes en attente : pattern reutilise depuis AdminView -->
     <router-link
       v-if="ordersStore.pendingCount > 0"
       to="/admin/orders"
@@ -58,7 +57,6 @@
       </button>
     </div>
 
-    <!-- Etats vides / erreurs -->
     <div v-if="error" class="alert error">{{ error }}</div>
 
     <div v-if="loading && !bets.length" class="empty-state">
@@ -73,142 +71,104 @@
       </div>
     </div>
 
-    <!-- Table principale -->
-    <div v-else class="table-wrap">
-      <table class="admin-table">
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>Statut</th>
-            <th>Affirmation</th>
-            <th>Créateur</th>
-            <th>Opposant</th>
-            <th>Arbitre</th>
-            <th class="ralign">Pot</th>
-            <th>Deadline</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="b in bets" :key="b.id">
-            <td class="mono">#{{ b.id }}</td>
-            <td>
-              <span class="status-pill" :class="b.status">{{
-                statusLabel(b.status)
-              }}</span>
-            </td>
-            <td class="statement-cell">
-              <div class="statement-text">{{ b.statement }}</div>
-              <div v-if="b.category" class="statement-cat mono">
-                {{ b.category }}
-              </div>
-            </td>
-            <td>
-              <div class="user-side">
-                <span>{{ b.creator_username }}</span>
-                <span class="side-tag" :class="`side-${b.creator_side}`">
-                  {{ b.creator_side === "yes" ? "VRAI" : "FAUX" }}
-                </span>
-              </div>
-              <div class="dim mono">{{ formatNum(b.stake_creator) }} CAMP</div>
-            </td>
-            <td>
-              <template v-if="b.opponent_username">
-                <div class="user-side">
-                  <span>{{ b.opponent_username }}</span>
-                  <span
-                    class="side-tag"
-                    :class="`side-${b.creator_side === 'yes' ? 'no' : 'yes'}`"
-                  >
-                    {{ b.creator_side === "yes" ? "FAUX" : "VRAI" }}
-                  </span>
-                </div>
-                <div class="dim mono">
-                  {{ formatNum(b.stake_opponent) }} CAMP
-                </div>
-              </template>
-              <template v-else>
-                <span class="dim">—</span>
-              </template>
-            </td>
-            <td>
-              <span v-if="b.arbiter_username">
-                {{ b.arbiter_username }}
-                <span v-if="b.arbiter_fee_pct" class="dim mono"
-                  >({{ b.arbiter_fee_pct }}%)</span
-                >
-              </span>
-              <span v-else class="dim">—</span>
-            </td>
-            <td class="ralign mono">
-              {{ formatNum(b.stake_creator + b.stake_opponent) }}
-            </td>
-            <td class="mono">{{ formatShort(b.deadline) }}</td>
-            <td class="actions-cell">
-              <div class="action-row">
-                <template v-if="b.status === 'matched'">
-                  <button
-                    class="btn-mini yes"
-                    :disabled="acting[b.id]"
-                    @click="forceResolve(b, 'yes')"
-                    title="Résoudre VRAI"
-                  >
-                    ✓
-                  </button>
-                  <button
-                    class="btn-mini no"
-                    :disabled="acting[b.id]"
-                    @click="forceResolve(b, 'no')"
-                    title="Résoudre FAUX"
-                  >
-                    ✗
-                  </button>
-                  <button
-                    class="btn-mini void"
-                    :disabled="acting[b.id]"
-                    @click="forceResolve(b, 'void')"
-                    title="Annuler (refund)"
-                  >
-                    ○
-                  </button>
-                </template>
-                <button
-                  v-if="b.status === 'open' || b.status === 'matched'"
-                  class="btn-mini cancel"
-                  :disabled="acting[b.id]"
-                  @click="forceCancel(b)"
-                  title="Force-cancel + refund"
-                >
-                  ⊘
-                </button>
-                <button
-                  v-if="b.status !== 'matched' && b.status !== 'resolved'"
-                  class="btn-mini delete"
-                  :disabled="acting[b.id]"
-                  @click="deleteRow(b)"
-                  title="Supprimer définitivement"
-                >
-                  🗑
-                </button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+    <!-- Liste en cartes admin -->
+    <div v-else class="bets-list">
+      <article v-for="b in bets" :key="b.id" class="admin-bet-card">
+        <header class="bet-row-top">
+          <span class="status-pill" :class="b.status">{{
+            statusLabel(b.status)
+          }}</span>
+          <span class="bet-type mono">
+            {{ b.type === "yes_no" ? "Oui / Non" : `${b.options.length} choix` }}
+          </span>
+          <span class="bet-id mono">#{{ b.id }}</span>
+        </header>
+
+        <h3 class="bet-row-statement">{{ b.statement }}</h3>
+
+        <!-- Options et participants -->
+        <div class="bet-options">
+          <div
+            v-for="o in b.options"
+            :key="o.id"
+            class="opt-pill"
+            :class="{
+              winner:
+                b.status === 'resolved' &&
+                !b.resolution_void &&
+                o.id === b.resolution_option_id,
+            }"
+          >
+            <span class="opt-label">{{ o.label }}</span>
+            <span class="opt-count mono">{{ o.participants_count }}</span>
+          </div>
+          <div v-if="b.resolution_void" class="opt-pill void">○ Void</div>
+        </div>
+
+        <div class="bet-info-row mono">
+          <span>👤 {{ b.creator_username }}</span>
+          <span v-if="b.arbiter_username">⚖️ {{ b.arbiter_username }}</span>
+          <span v-else>🗳️ {{ b.votes_count }} voix</span>
+          <span>💰 {{ formatNum(b.stake) }} CAMP/mise</span>
+          <span class="pot-info">Pot {{ formatNum(b.pot_total) }}</span>
+          <span>⏱ {{ formatShort(b.deadline) }}</span>
+        </div>
+
+        <!-- Actions admin -->
+        <div v-if="b.status === 'open'" class="admin-actions">
+          <div class="resolve-bar">
+            <span class="action-label">Force-resolve →</span>
+            <button
+              v-for="o in b.options"
+              :key="o.id"
+              class="btn-mini resolve"
+              :disabled="acting[b.id]"
+              @click="forceResolve(b, o)"
+              :title="`Résoudre vers ${o.label}`"
+            >
+              {{ o.label }}
+              <span class="count-tag mono">{{ o.participants_count }}</span>
+            </button>
+            <button
+              class="btn-mini void"
+              :disabled="acting[b.id]"
+              @click="forceResolve(b, null)"
+              title="Résoudre void (refund tous)"
+            >
+              ○ Nul
+            </button>
+            <button
+              class="btn-mini cancel"
+              :disabled="acting[b.id]"
+              @click="forceCancel(b)"
+              title="Cancel + refund tous"
+            >
+              ⊘ Cancel
+            </button>
+          </div>
+        </div>
+        <div v-else class="admin-actions">
+          <button
+            v-if="b.status !== 'resolved'"
+            class="btn-mini delete"
+            :disabled="acting[b.id]"
+            @click="deleteRow(b)"
+            title="Supprimer définitivement"
+          >
+            🗑 Supprimer
+          </button>
+          <span v-if="b.resolved_by" class="resolved-by mono">
+            résolu par {{ formatResolvedBy(b.resolved_by) }}
+            <template v-if="b.resolved_at">
+              · {{ formatShort(b.resolved_at) }}
+            </template>
+          </span>
+        </div>
+      </article>
     </div>
 
-    <!-- Notif globale (pattern AdminView) -->
     <div v-if="globalSuccess" class="alert success" style="margin-top: 1em">
       {{ globalSuccess }}
-      <div v-if="globalTx" style="margin-top: 0.4em; font-size: 0.85em">
-        <a
-          :href="'https://sepolia.basescan.org/tx/' + globalTx"
-          target="_blank"
-          rel="noreferrer"
-        >
-          Voir la tx sur BaseScan →
-        </a>
-      </div>
     </div>
   </main>
 </template>
@@ -227,7 +187,6 @@ const ordersStore = useOrdersStore();
 const STATUSES = [
   { value: "all", label: "Tous" },
   { value: "open", label: "Ouverts" },
-  { value: "matched", label: "En cours" },
   { value: "resolved", label: "Résolus" },
   { value: "cancelled", label: "Annulés" },
   { value: "expired", label: "Expirés" },
@@ -240,13 +199,9 @@ const error = ref(null);
 const filterStatus = ref("all");
 const acting = reactive({});
 const globalSuccess = ref("");
-const globalTx = ref("");
 
 const totalPot = computed(() =>
-  bets.value.reduce(
-    (s, b) => s + Number(b.stake_creator || 0) + Number(b.stake_opponent || 0),
-    0,
-  ),
+  bets.value.reduce((s, b) => s + Number(b.pot_total || 0), 0),
 );
 
 async function loadAll() {
@@ -257,8 +212,6 @@ async function loadAll() {
       auth.adminToken,
       filterStatus.value === "all" ? {} : { status: filterStatus.value },
     );
-    // Si on filtre, on recompte que pour le bucket courant
-    // sinon on fait le full count
     if (filterStatus.value === "all") {
       const c = {};
       for (const b of bets.value) c[b.status] = (c[b.status] || 0) + 1;
@@ -270,7 +223,6 @@ async function loadAll() {
         [filterStatus.value]: bets.value.length,
       };
     }
-    // Recharge le compteur de demandes en attente (silencieux si erreur)
     ordersStore.load("all").catch(() => {});
   } catch (e) {
     error.value = e.message;
@@ -279,33 +231,27 @@ async function loadAll() {
   }
 }
 
-function notifyTx({ message, tx_hash }) {
+function notify(message) {
   globalSuccess.value = message;
-  globalTx.value = tx_hash || "";
   setTimeout(() => {
     globalSuccess.value = "";
-    globalTx.value = "";
-  }, 8000);
+  }, 6000);
 }
 
-async function forceResolve(bet, resolution) {
-  const labels = { yes: "VRAI", no: "FAUX", void: "NUL" };
-  if (!confirm(`Force-resolve pari #${bet.id} → ${labels[resolution]} ?`))
-    return;
+async function forceResolve(bet, option) {
+  const label = option ? `"${option.label}"` : "NUL (refund tous)";
+  if (!confirm(`Force-resolve pari #${bet.id} → ${label} ?`)) return;
   acting[bet.id] = true;
   error.value = null;
   try {
     const updated = await adminBetsApi.resolve(
       auth.adminToken,
       bet.id,
-      resolution,
+      option ? option.id : null,
     );
     const i = bets.value.findIndex((b) => b.id === bet.id);
     if (i >= 0) bets.value[i] = updated;
-    notifyTx({
-      message: `Pari #${bet.id} résolu (${labels[resolution]})`,
-      tx_hash: updated.tx_hash_payout_winner,
-    });
+    notify(`Pari #${bet.id} résolu (${label}).`);
   } catch (e) {
     error.value = e.message;
   } finally {
@@ -316,7 +262,7 @@ async function forceResolve(bet, resolution) {
 async function forceCancel(bet) {
   if (
     !confirm(
-      `Force-cancel pari #${bet.id} ? Les fonds bloqués seront refundés.`,
+      `Force-cancel pari #${bet.id} ? Refund de ${bet.participants_count} participant(s).`,
     )
   )
     return;
@@ -326,7 +272,7 @@ async function forceCancel(bet) {
     const updated = await adminBetsApi.cancel(auth.adminToken, bet.id);
     const i = bets.value.findIndex((b) => b.id === bet.id);
     if (i >= 0) bets.value[i] = updated;
-    notifyTx({ message: `Pari #${bet.id} annulé, fonds refundés.` });
+    notify(`Pari #${bet.id} annulé.`);
   } catch (e) {
     error.value = e.message;
   } finally {
@@ -338,8 +284,7 @@ async function deleteRow(bet) {
   if (
     !confirm(
       `SUPPRIMER définitivement pari #${bet.id} ?\n\n` +
-        `Cette opération n'annule PAS les mouvements on-chain déjà faits, ` +
-        `seulement la ligne en DB. À réserver aux tests / erreurs.`,
+        `N'annule PAS les mouvements on-chain. Réservé aux tests/erreurs.`,
     )
   )
     return;
@@ -348,7 +293,7 @@ async function deleteRow(bet) {
   try {
     await adminBetsApi.delete(auth.adminToken, bet.id);
     bets.value = bets.value.filter((b) => b.id !== bet.id);
-    notifyTx({ message: `Pari #${bet.id} supprimé.` });
+    notify(`Pari #${bet.id} supprimé.`);
   } catch (e) {
     error.value = e.message;
   } finally {
@@ -360,12 +305,18 @@ function statusLabel(s) {
   return (
     {
       open: "Ouvert",
-      matched: "En cours",
       resolved: "Résolu",
       cancelled: "Annulé",
       expired: "Expiré",
     }[s] || s
   );
+}
+
+function formatResolvedBy(r) {
+  if (r === "__community__") return "communauté";
+  if (r === "__admin__") return "admin";
+  if (r === "__expired__") return "expiration";
+  return r;
 }
 
 function formatShort(iso) {
@@ -383,7 +334,6 @@ onMounted(loadAll);
   color: var(--camp);
 }
 
-/* ─── Bandeau pending — copie 1:1 d'AdminView ─────────── */
 .pending-banner {
   display: flex;
   align-items: center;
@@ -427,7 +377,6 @@ onMounted(loadAll);
   color: var(--camp);
 }
 
-/* ─── Toolbar (pattern OrdersView) ────────────────────── */
 .toolbar {
   display: flex;
   gap: 0.8em;
@@ -443,7 +392,6 @@ onMounted(loadAll);
   color: var(--text-3);
 }
 
-/* ─── Filtres (chip pattern) ──────────────────────────── */
 .filters {
   display: flex;
   flex-wrap: wrap;
@@ -483,9 +431,111 @@ onMounted(loadAll);
   color: var(--bg-0);
 }
 
-/* ─── Status pills (pattern OrdersView) ───────────────── */
+.empty-state {
+  text-align: center;
+  padding: 2.5em 1em;
+  color: var(--text-2);
+}
+.empty-state .emoji {
+  font-size: 2em;
+  margin-bottom: 0.5em;
+}
+
+/* ─── Cards liste admin ──────────────────────────────── */
+.bets-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8em;
+}
+.admin-bet-card {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1em 1.1em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7em;
+}
+.bet-row-top {
+  display: flex;
+  align-items: center;
+  gap: 0.7em;
+  flex-wrap: wrap;
+}
+.bet-id {
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 0.85em;
+}
+.bet-type {
+  font-size: 0.7em;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-3);
+}
+.bet-row-statement {
+  font-size: 1em;
+  margin: 0;
+  line-height: 1.35;
+}
+
+.bet-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4em;
+}
+.opt-pill {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.25em 0.7em 0.25em 0.85em;
+  font-size: 0.82em;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+}
+.opt-pill.winner {
+  border-color: var(--gold);
+  background: rgba(245, 200, 66, 0.1);
+  color: var(--gold);
+  font-weight: 700;
+}
+.opt-pill.void {
+  border-style: dashed;
+  color: var(--text-3);
+}
+.opt-label {
+  font-weight: 600;
+}
+.opt-count {
+  background: var(--bg-3);
+  padding: 0.05em 0.5em;
+  border-radius: 999px;
+  font-size: 0.78em;
+  color: var(--text-1);
+  font-weight: 700;
+}
+.opt-pill.winner .opt-count {
+  background: rgba(245, 200, 66, 0.2);
+  color: var(--gold);
+}
+
+.bet-info-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9em;
+  font-size: 0.78em;
+  color: var(--text-2);
+  padding-top: 0.5em;
+  border-top: 1px dashed var(--border);
+}
+.pot-info {
+  color: var(--gold);
+  font-weight: 700;
+}
+
 .status-pill {
-  font-size: 0.72em;
+  font-size: 0.7em;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -496,10 +546,6 @@ onMounted(loadAll);
 .status-pill.open {
   background: var(--green-soft);
   color: var(--green);
-}
-.status-pill.matched {
-  background: var(--camp-soft);
-  color: var(--camp);
 }
 .status-pill.resolved {
   background: var(--bg-3);
@@ -514,118 +560,43 @@ onMounted(loadAll);
   color: var(--red);
 }
 
-/* ─── Empty state (pattern OrdersView) ────────────────── */
-.empty-state {
-  text-align: center;
-  padding: 2.5em 1em;
-  color: var(--text-2);
-}
-.empty-state .emoji {
-  font-size: 2em;
-  margin-bottom: 0.5em;
-}
-
-/* ─── Table ──────────────────────────────────────────── */
-.table-wrap {
-  background: var(--bg-1);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow-x: auto;
-}
-.admin-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.88em;
-}
-.admin-table th,
-.admin-table td {
-  padding: 0.7em 0.8em;
-  text-align: left;
-  vertical-align: top;
-}
-.admin-table thead th {
-  background: var(--bg-2);
-  font-weight: 600;
-  font-size: 0.78em;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-2);
-  border-bottom: 1px solid var(--border);
-  position: sticky;
-  top: 0;
-}
-.admin-table tbody tr {
-  border-bottom: 1px solid var(--border);
-}
-.admin-table tbody tr:last-child {
-  border-bottom: none;
-}
-.admin-table tbody tr:hover {
-  background: var(--bg-2);
-}
-
-.statement-cell {
-  max-width: 30ch;
-}
-.statement-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-.statement-cat {
-  font-size: 0.7em;
-  color: var(--camp);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  margin-top: 0.2em;
-}
-
-.user-side {
+/* ─── Admin actions row ──────────────────────────────── */
+.admin-actions {
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
   gap: 0.4em;
-  font-weight: 600;
+  align-items: center;
+  padding-top: 0.5em;
+  border-top: 1px dashed var(--border);
 }
-.side-tag {
-  font-size: 0.62em;
-  padding: 0.1em 0.45em;
-  border-radius: 999px;
-  letter-spacing: 0.05em;
-  font-weight: 700;
-}
-.side-yes {
-  background: var(--green-soft);
-  color: var(--green);
-}
-.side-no {
-  background: var(--red-soft);
-  color: var(--red);
-}
-
-.ralign {
-  text-align: right;
-}
-.actions-cell {
-  white-space: nowrap;
-}
-
-.action-row {
+.resolve-bar {
   display: flex;
-  gap: 0.3em;
+  flex-wrap: wrap;
+  gap: 0.4em;
+  align-items: center;
+  width: 100%;
 }
+.action-label {
+  font-size: 0.78em;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-right: 0.3em;
+}
+
 .btn-mini {
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0.35em 0.6em;
-  font-size: 1em;
+  padding: 0.4em 0.7em;
+  font-size: 0.82em;
   cursor: pointer;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--text-1);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
   transition: all 0.15s;
-  line-height: 1;
 }
 .btn-mini:hover:not(:disabled) {
   border-color: var(--border-strong);
@@ -635,13 +606,9 @@ onMounted(loadAll);
   opacity: 0.4;
   cursor: not-allowed;
 }
-.btn-mini.yes:hover {
-  border-color: var(--green);
-  color: var(--green);
-}
-.btn-mini.no:hover {
-  border-color: var(--red);
-  color: var(--red);
+.btn-mini.resolve:hover {
+  border-color: var(--gold);
+  color: var(--gold);
 }
 .btn-mini.void:hover {
   border-color: var(--text-2);
@@ -654,13 +621,41 @@ onMounted(loadAll);
   border-color: var(--red);
   color: var(--red);
 }
+.count-tag {
+  background: var(--bg-3);
+  padding: 0.05em 0.4em;
+  border-radius: 999px;
+  font-size: 0.7em;
+  color: var(--text-2);
+}
 
-@media (max-width: 900px) {
-  .admin-table {
-    font-size: 0.75em;
+.resolved-by {
+  font-size: 0.78em;
+  color: var(--text-3);
+}
+
+.alert.error {
+  background: rgba(255, 69, 102, 0.1);
+  border: 1px solid var(--red);
+  border-radius: var(--radius-sm);
+  padding: 0.8em 1em;
+  color: var(--red);
+}
+.alert.success {
+  background: var(--green-soft);
+  border: 1px solid var(--green);
+  border-radius: var(--radius-sm);
+  padding: 0.8em 1em;
+  color: var(--green);
+}
+
+@media (max-width: 600px) {
+  .bet-info-row {
+    flex-direction: column;
+    gap: 0.3em;
   }
-  .statement-cell {
-    max-width: 18ch;
+  .admin-bet-card {
+    padding: 0.9em;
   }
 }
 </style>

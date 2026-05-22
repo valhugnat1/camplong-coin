@@ -55,19 +55,42 @@ class CreateOrderIn(BaseModel):
 # ─── Bets ──────────────────────────────────────────────
 
 class CreateBetIn(BaseModel):
+    """
+    Creation d'un pari :
+      - type 'yes_no' : on cree automatiquement 2 options Oui / Non.
+        Le champ 'options' est ignore.
+      - type 'multi_choice' : 'options' doit contenir 2 a 6 labels distincts.
+
+    'creator_option_index' : index dans la liste finale d'options (0..n-1) sur
+    laquelle le createur souhaite parier. None s'il ne participe pas.
+    """
     statement: str = Field(..., min_length=1, max_length=512)
-    category: Optional[str] = Field(None, max_length=32)
     deadline: datetime.datetime
-    creator_side: Literal["yes", "no"]
-    stake_creator: int = Field(..., gt=0)
-    odds_num: int = Field(..., gt=0)
-    odds_den: int = Field(..., gt=0)
+    type: Literal["yes_no", "multi_choice"] = "yes_no"
+    stake: int = Field(..., gt=0)
+    options: Optional[list[str]] = None
+    creator_option_index: Optional[int] = Field(None, ge=0, le=5)
     arbiter_username: Optional[str] = None
-    arbiter_fee_pct: int = Field(0, ge=0, le=50)
+
+
+class JoinBetIn(BaseModel):
+    """Rejoindre un pari sur une option donnee."""
+    option_id: int = Field(..., gt=0)
+
+
+class VoteBetIn(BaseModel):
+    """
+    Vote communautaire sur la resolution. option_id = NULL = vote pour 'void'
+    (refund de tous les participants).
+    """
+    option_id: Optional[int] = None
 
 
 class ResolveBetIn(BaseModel):
-    resolution: Literal["yes", "no", "void"]
+    """
+    Resolution arbitre ou admin. option_id = NULL = void.
+    """
+    option_id: Optional[int] = None
 
 
 # ─── Casino ────────────────────────────────────────────

@@ -32,6 +32,15 @@ export const PAYMENT = {
   revolut: '@hugo1weu7'
 }
 
+// Paris communautaires (doit rester en sync avec backend/config.py BETS)
+export const BETS = {
+  minStake: 1,
+  maxStake: 1000,
+  maxOpenBetsPerUser: 10,
+  minOptions: 2,
+  maxOptions: 6,
+}
+
 // ─── Helpers ───────────────────────────────────────────
 
 export function campToEur(camp) {

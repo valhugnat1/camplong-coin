@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════
-// CamplongCoin — Store Pinia : Paris (bets)
+// CamplongCoin — Store Pinia : Paris communautaires
 // ═══════════════════════════════════════════════════════════
 
 import { defineStore } from "pinia";
@@ -14,25 +14,17 @@ export const useBetsStore = defineStore("bets", () => {
 
   // ─── State ────────────────────────────────────────────
   const openBets = ref([]); // /bets?status=open
-  const myBets = ref([]); // /me/bets (avec my_role par item)
-  const detail = ref(null); // /bets/:id courant
+  const myBets = ref([]); // /me/bets
+  const detail = ref(null); // /bets/:id
   const loading = ref(false);
   const error = ref(null);
 
   // ─── Getters ──────────────────────────────────────────
-  const openByCategory = computed(() => {
-    const groups = {};
-    for (const b of openBets.value) {
-      const cat = b.category || "Autre";
-      (groups[cat] ||= []).push(b);
-    }
-    return groups;
-  });
-
   const myOpenCount = computed(
     () =>
-      myBets.value.filter((b) => b.status === "open" && b.my_role === "creator")
-        .length,
+      myBets.value.filter(
+        (b) => b.status === "open" && b.my_role === "creator",
+      ).length,
   );
 
   // ─── Helpers internes ─────────────────────────────────
@@ -51,7 +43,6 @@ export const useBetsStore = defineStore("bets", () => {
     };
   }
 
-  // Tente de rafraichir le wallet sans crasher si l'API du store differe.
   async function _refreshWallet() {
     try {
       if (typeof wallet.refresh === "function") await wallet.refresh();
@@ -60,6 +51,11 @@ export const useBetsStore = defineStore("bets", () => {
     } catch (e) {
       /* silent */
     }
+  }
+
+  function _replaceInList(list, bet) {
+    const i = list.findIndex((b) => b.id === bet.id);
+    if (i >= 0) list[i] = bet;
   }
 
   // ─── Actions ──────────────────────────────────────────
@@ -82,43 +78,46 @@ export const useBetsStore = defineStore("bets", () => {
   const create = _withLoading(async (payload) => {
     const bet = await betsApi.create(auth.userToken, payload);
     openBets.value.unshift(bet);
-    await _refreshWallet(); // solde a diminue (lock du creator)
+    // Solde diminué si le créateur a participé
+    if (payload.creator_option_index != null) await _refreshWallet();
     return bet;
   });
 
-  const match = _withLoading(async (id) => {
-    const bet = await betsApi.match(auth.userToken, id);
-    // L'ancien open n'apparait plus dans la liste publique
-    openBets.value = openBets.value.filter((b) => b.id !== id);
+  const join = _withLoading(async (id, optionId) => {
+    const bet = await betsApi.join(auth.userToken, id, optionId);
+    _replaceInList(openBets.value, bet);
     if (detail.value?.id === id) detail.value = bet;
     await _refreshWallet();
     return bet;
   });
 
   const cancel = _withLoading(async (id) => {
-    await betsApi.cancel(auth.userToken, id);
+    const bet = await betsApi.cancel(auth.userToken, id);
     openBets.value = openBets.value.filter((b) => b.id !== id);
-    if (detail.value?.id === id)
-      detail.value = { ...detail.value, status: "cancelled" };
-    await _refreshWallet();
-  });
-
-  const resolve = _withLoading(async (id, resolution) => {
-    const bet = await betsApi.resolve(auth.userToken, id, resolution);
     if (detail.value?.id === id) detail.value = bet;
     await _refreshWallet();
     return bet;
   });
 
-  const vote = _withLoading(async (id, resolution) => {
-    const bet = await betsApi.vote(auth.userToken, id, resolution);
+  const resolve = _withLoading(async (id, optionId) => {
+    const bet = await betsApi.resolve(auth.userToken, id, optionId);
     if (detail.value?.id === id) detail.value = bet;
-    // Si l'accord vient d'etre trouve, le payout a deja eu lieu → solde change.
-    if (bet.status === "resolved") await _refreshWallet();
+    openBets.value = openBets.value.filter((b) => b.id !== id);
+    await _refreshWallet();
     return bet;
   });
 
-  // ─── Reset (utile au logout) ──────────────────────────
+  const vote = _withLoading(async (id, optionId) => {
+    const bet = await betsApi.vote(auth.userToken, id, optionId);
+    if (detail.value?.id === id) detail.value = bet;
+    // Si l'accord vient d'etre trouve, settlement et payouts on-chain
+    if (bet.status === "resolved") {
+      openBets.value = openBets.value.filter((b) => b.id !== id);
+      await _refreshWallet();
+    }
+    return bet;
+  });
+
   function reset() {
     openBets.value = [];
     myBets.value = [];
@@ -128,21 +127,17 @@ export const useBetsStore = defineStore("bets", () => {
   }
 
   return {
-    // state
     openBets,
     myBets,
     detail,
     loading,
     error,
-    // getters
-    openByCategory,
     myOpenCount,
-    // actions
     fetchOpen,
     fetchMine,
     fetchDetail,
     create,
-    match,
+    join,
     cancel,
     resolve,
     vote,

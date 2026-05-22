@@ -1,61 +1,49 @@
 <template>
   <article class="bet-card" @click="onClick">
     <header class="bet-card-head">
-      <span v-if="bet.category" class="bet-cat">{{ bet.category }}</span>
       <BetStatusBadge :status="bet.status" />
+      <span class="bet-type-tag mono">
+        {{ bet.type === "yes_no" ? "Oui / Non" : `${bet.options.length} choix` }}
+      </span>
     </header>
 
     <h3 class="bet-statement">{{ bet.statement }}</h3>
 
-    <div class="bet-sides">
+    <!-- Options avec barres de participation -->
+    <div class="opts">
       <div
-        class="side"
-        :class="bet.creator_side === 'yes' ? 'side-yes' : 'side-no'"
+        v-for="o in bet.options"
+        :key="o.id"
+        class="opt-row"
+        :class="{ mine: o.id === bet.my_option_id }"
       >
-        <div class="side-label">
-          {{ bet.creator_username }}
-          <span class="side-pos">{{
-            bet.creator_side === "yes" ? "VRAI" : "FAUX"
-          }}</span>
+        <div class="opt-bar-wrap">
+          <div
+            class="opt-bar"
+            :style="{ width: barWidth(o) + '%' }"
+          />
         </div>
-        <div class="side-stake mono">
-          {{ formatNum(bet.stake_creator) }} CAMP
-        </div>
-      </div>
-
-      <div class="vs">VS</div>
-
-      <div
-        class="side"
-        :class="bet.creator_side === 'yes' ? 'side-no' : 'side-yes'"
-      >
-        <div class="side-label">
-          <template v-if="bet.opponent_username">
-            {{ bet.opponent_username }}
-            <span class="side-pos">{{
-              bet.creator_side === "yes" ? "FAUX" : "VRAI"
-            }}</span>
-          </template>
-          <template v-else>
-            <span class="side-empty">À prendre</span>
-          </template>
-        </div>
-        <div class="side-stake mono">
-          {{ formatNum(bet.stake_opponent) }} CAMP
+        <div class="opt-meta">
+          <span class="opt-label">
+            {{ o.label }}
+            <span v-if="o.id === bet.my_option_id" class="opt-mine-tag">★</span>
+          </span>
+          <span class="opt-count mono">{{ o.participants_count }}</span>
         </div>
       </div>
     </div>
 
     <footer class="bet-meta mono">
-      <span>💰 {{ formatNum(pot) }} CAMP</span>
+      <span>💰 {{ formatNum(bet.stake) }} CAMP/mise</span>
+      <span class="pot">Pot {{ formatNum(bet.pot_total) }}</span>
       <span>{{ formatDeadline(bet.deadline) }}</span>
     </footer>
 
     <div v-if="bet.arbiter_username" class="bet-arbiter">
       ⚖️ arbitre : {{ bet.arbiter_username }}
-      <span v-if="bet.arbiter_fee_pct > 0" class="dim"
-        >({{ bet.arbiter_fee_pct }}%)</span
-      >
+    </div>
+    <div v-else class="bet-arbiter">
+      🗳️ vote communautaire (2 voix concordantes)
     </div>
   </article>
 </template>
@@ -74,9 +62,14 @@ const props = defineProps({
 const emit = defineEmits(["click"]);
 const router = useRouter();
 
-const pot = computed(
-  () => (props.bet.stake_creator || 0) + (props.bet.stake_opponent || 0),
+const maxCount = computed(() =>
+  Math.max(1, ...(props.bet.options || []).map((o) => o.participants_count)),
 );
+
+function barWidth(opt) {
+  if (!maxCount.value) return 0;
+  return Math.round((opt.participants_count / maxCount.value) * 100);
+}
 
 function onClick() {
   if (!props.clickable) return;
@@ -108,7 +101,7 @@ function formatDeadline(iso) {
   background: var(--bg-1);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 1.2em 1.3em;
+  padding: 1.1em 1.2em;
   cursor: pointer;
   transition:
     transform 0.15s,
@@ -121,6 +114,9 @@ function formatDeadline(iso) {
   transform: translateY(-2px);
   border-color: var(--border-strong);
 }
+.bet-card:active {
+  transform: translateY(0);
+}
 
 .bet-card-head {
   display: flex;
@@ -129,11 +125,11 @@ function formatDeadline(iso) {
   gap: 0.5em;
 }
 
-.bet-cat {
+.bet-type-tag {
   font-size: 0.68em;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  color: var(--violet);
+  color: var(--text-3);
   font-weight: 700;
 }
 
@@ -141,75 +137,87 @@ function formatDeadline(iso) {
   font-size: 1.05em;
   line-height: 1.35;
   letter-spacing: -0.01em;
-  min-height: 2.7em;
   margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
-.bet-sides {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  gap: 0.5em;
-  align-items: center;
+.opts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4em;
 }
-
-.side {
+.opt-row {
+  position: relative;
+  padding: 0.5em 0.7em;
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0.6em 0.7em;
+  overflow: hidden;
+}
+.opt-row.mine {
+  border-color: var(--violet);
+  box-shadow: 0 0 0 1px var(--violet);
+}
+.opt-bar-wrap {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+}
+.opt-bar {
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    rgba(154, 78, 255, 0.18),
+    rgba(154, 78, 255, 0.06)
+  );
+  transition: width 0.3s ease;
+}
+.opt-row.mine .opt-bar {
+  background: linear-gradient(
+    90deg,
+    rgba(154, 78, 255, 0.35),
+    rgba(154, 78, 255, 0.1)
+  );
+}
+.opt-meta {
+  position: relative;
   display: flex;
-  flex-direction: column;
-  gap: 0.25em;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5em;
+  font-size: 0.88em;
 }
-.side-yes {
-  border-left: 3px solid var(--green);
-}
-.side-no {
-  border-left: 3px solid var(--red);
-}
-
-.side-label {
-  font-size: 0.78em;
-  color: var(--text-1);
-  display: flex;
-  flex-direction: column;
-  gap: 0.15em;
-}
-.side-pos {
-  font-size: 0.7em;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-}
-.side-yes .side-pos {
-  color: var(--green);
-}
-.side-no .side-pos {
-  color: var(--red);
-}
-
-.side-empty {
-  font-style: italic;
-  color: var(--text-3);
-}
-
-.side-stake {
-  font-size: 0.9em;
-  font-weight: 700;
+.opt-label {
+  font-weight: 600;
   color: var(--text-0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-
-.vs {
-  font-size: 0.7em;
+.opt-mine-tag {
+  color: var(--gold);
+  margin-left: 0.3em;
+}
+.opt-count {
   font-weight: 700;
-  color: var(--text-3);
-  letter-spacing: 0.1em;
+  color: var(--text-1);
+  flex-shrink: 0;
 }
 
 .bet-meta {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
+  gap: 0.5em;
   font-size: 0.78em;
   color: var(--text-2);
+}
+.bet-meta .pot {
+  color: var(--gold);
+  font-weight: 700;
 }
 
 .bet-arbiter {
@@ -218,7 +226,13 @@ function formatDeadline(iso) {
   padding-top: 0.4em;
   border-top: 1px dashed var(--border);
 }
-.dim {
-  color: var(--text-3);
+
+@media (max-width: 480px) {
+  .bet-card {
+    padding: 1em;
+  }
+  .bet-statement {
+    font-size: 1em;
+  }
 }
 </style>

@@ -6,18 +6,25 @@ from eth_account import Account
 from jose import jwt
 
 from database import get_db
-from models import User, Transaction, MarketOrder, Bet, CoinflipRound, RouletteSpin, SlotsSpin
+from models import (
+    User, Transaction, MarketOrder,
+    Bet, BetOption, BetParticipation,
+    CoinflipRound, RouletteSpin, SlotsSpin,
+)
 from schemas import (
     AdminLoginIn, CreateUserIn, AmountIn, UpdateOrderIn, ResolveBetIn,
     SettingUpdateIn,
 )
 from security import require_admin, fernet
 from blockchain import admin_transfer, get_balance_camp, get_balance_eth, treasury
-from email_service import send_user_order_done, send_bet_resolved
+from email_service import send_user_order_done
 from config import ADMIN_PASSWORD, JWT_SECRET
 from services import escrow, coinflip, roulette, slots
 from services import settings as settings_svc
-from routers.bets import _bet_dict, _settle_resolved, BETS_ESCROW_ROLE, _user_email
+from routers.bets import (
+    _bet_dict, _settle_resolved, _participations_for, _options_for,
+    BETS_ESCROW_ROLE, ADMIN_RESOLVED_BY,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -391,22 +398,17 @@ def delete_order(
 
 # ─── Bets (admin) ──────────────────────────────────────
 
-ADMIN_RESOLVED_BY = "__admin__"
-
 
 @router.get("/bets")
 def admin_list_bets(
-    status: str = Query("all", pattern="^(all|open|matched|resolved|cancelled|expired)$"),
-    category: str | None = Query(None),
+    status: str = Query("all", pattern="^(all|open|resolved|cancelled|expired)$"),
     _: bool = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     q = db.query(Bet).order_by(Bet.created_at.desc())
     if status != "all":
         q = q.filter(Bet.status == status)
-    if category:
-        q = q.filter(Bet.category == category)
-    return [_bet_dict(b) for b in q.all()]
+    return [_bet_dict(db, b) for b in q.all()]
 
 
 @router.post("/bets/{bet_id}/resolve")
@@ -418,8 +420,10 @@ def admin_resolve_bet(
     db: Session = Depends(get_db),
 ):
     """
-    Override de resolution : meme logique que /bets/{id}/resolve mais sans la
-    contrainte arbitre. Sert pour les paris sans arbitre designe ou les overrides.
+    Force-resolve par l'admin. body.option_id = NULL = void (refund tous).
+    Sinon : payout reparti egalement entre les participants de l'option
+    designee. Si l'option n'a aucun participant ou si une seule option a
+    des participants, force le void (cf. _settle_resolved).
     """
     bet = (
         db.query(Bet)
@@ -429,11 +433,25 @@ def admin_resolve_bet(
     )
     if not bet:
         raise HTTPException(404, "Pari introuvable")
-    if bet.status != "matched":
+    if bet.status != "open":
         raise HTTPException(400, f"Pari non resolvable (statut: {bet.status})")
 
+    if body.option_id is not None:
+        opt = (
+            db.query(BetOption)
+              .filter(BetOption.id == body.option_id, BetOption.bet_id == bet_id)
+              .first()
+        )
+        if not opt:
+            raise HTTPException(400, "Option invalide pour ce pari")
+
     try:
-        _settle_resolved(db, bet, body.resolution, resolved_by=ADMIN_RESOLVED_BY)
+        _settle_resolved(
+            db, bet,
+            resolution_option_id=body.option_id,
+            resolved_by=ADMIN_RESOLVED_BY,
+            background_tasks=background_tasks,
+        )
     except escrow.EscrowError as e:
         db.rollback()
         raise HTTPException(400, str(e))
@@ -443,15 +461,7 @@ def admin_resolve_bet(
 
     db.commit()
     db.refresh(bet)
-
-    for u_name in (bet.creator_username, bet.opponent_username):
-        em = _user_email(db, u_name)
-        if em:
-            background_tasks.add_task(
-                send_bet_resolved, _bet_dict(bet), em, u_name,
-            )
-
-    return _bet_dict(bet)
+    return _bet_dict(db, bet)
 
 
 @router.post("/bets/{bet_id}/cancel")
@@ -461,9 +471,9 @@ def admin_cancel_bet(
     db: Session = Depends(get_db),
 ):
     """
-    Force-cancel : refund creator (et opponent si matched).
-    Refus sur 'resolved' (les fonds sont deja distribues, irreversibles).
-    Sur 'cancelled' ou 'expired' : no-op.
+    Force-cancel : refund de tous les participants. Refus sur 'resolved'
+    (les fonds sont deja distribues, irreversibles). Sur 'cancelled' ou
+    'expired' : no-op.
     """
     bet = (
         db.query(Bet)
@@ -476,22 +486,20 @@ def admin_cancel_bet(
     if bet.status == "resolved":
         raise HTTPException(400, "Pari deja resolu, fonds distribues - impossible d'annuler")
     if bet.status in ("cancelled", "expired"):
-        return _bet_dict(bet)
+        return _bet_dict(db, bet)
 
-    creator = db.get(User, bet.creator_username)
-    opponent = db.get(User, bet.opponent_username) if bet.opponent_username else None
+    parts = _participations_for(db, bet.id)
 
     try:
-        if creator:
-            escrow.release(
-                db, BETS_ESCROW_ROLE, creator, bet.stake_creator,
-                f"bet #{bet.id} admin cancel refund (creator)",
+        for p in parts:
+            u = db.get(User, p.username)
+            if not u:
+                continue
+            tx = escrow.release(
+                db, BETS_ESCROW_ROLE, u, p.amount,
+                f"bet #{bet.id} admin cancel refund",
             )
-        if bet.status == "matched" and opponent:
-            escrow.release(
-                db, BETS_ESCROW_ROLE, opponent, bet.stake_opponent,
-                f"bet #{bet.id} admin cancel refund (opponent)",
-            )
+            p.tx_hash_payout = tx
     except escrow.EscrowError as e:
         db.rollback()
         raise HTTPException(400, str(e))
@@ -500,11 +508,12 @@ def admin_cancel_bet(
         raise HTTPException(500, f"Echec du refund on-chain : {e}")
 
     bet.status = "cancelled"
+    bet.resolution_void = True
     bet.resolved_at = datetime.datetime.utcnow()
     bet.resolved_by = ADMIN_RESOLVED_BY
     db.commit()
     db.refresh(bet)
-    return _bet_dict(bet)
+    return _bet_dict(db, bet)
 
 
 @router.delete("/bets/{bet_id}")
@@ -515,17 +524,30 @@ def admin_delete_bet(
 ):
     """
     Suppression DB definitive. N'annule PAS les mouvements on-chain.
-    Refus sur 'matched' / 'resolved' (fonds escrowes ou distribues -
-    compromettrait l'audit). Force-cancel d'abord.
+    Refus sur 'open' avec participants (fonds escrowes) et sur 'resolved'.
+    Force-cancel d'abord pour les paris avec mouvements actifs.
     """
     bet = db.get(Bet, bet_id)
     if not bet:
         raise HTTPException(404, "Pari introuvable")
-    if bet.status in ("matched", "resolved"):
+    if bet.status == "resolved":
         raise HTTPException(
             400,
-            f"Pari en statut '{bet.status}' : force-cancel d'abord (POST /admin/bets/{bet_id}/cancel)"
+            f"Pari resolved : suppression refusee (audit on-chain)."
         )
+    if bet.status == "open":
+        parts_count = (
+            db.query(BetParticipation)
+              .filter(BetParticipation.bet_id == bet.id)
+              .count()
+        )
+        if parts_count > 0:
+            raise HTTPException(
+                400,
+                f"Pari open avec {parts_count} participation(s) : "
+                f"force-cancel d'abord (POST /admin/bets/{bet_id}/cancel)"
+            )
+    # cascade delete via FK ON DELETE CASCADE supprime options/participations/votes
     db.delete(bet)
     db.commit()
     return {"status": "deleted", "id": bet_id}

@@ -87,62 +87,62 @@ def send_admin_new_order(order: dict, user_email: Optional[str]) -> None:
 
 def send_bet_arbiter_assigned(bet: dict, arbiter_email: str) -> None:
     """Previent un arbitre qu'il a ete designe pour trancher un pari."""
+    opts = ", ".join(o["label"] for o in bet.get("options", []))
     subject = f"[CamplongCoin] On t'a designe arbitre - pari #{bet['id']}"
     body = (
         f"Salut,\n\n"
         f"{bet['creator_username']} t'a designe arbitre pour ce pari :\n\n"
         f"  \"{bet['statement']}\"\n\n"
         f"  Pari #{bet['id']}\n"
-        f"  Mise creator   : {bet['stake_creator']} CAMP ({bet['creator_side'].upper()})\n"
-        f"  Mise opponent  : {bet['stake_opponent']} CAMP\n"
-        f"  Commission     : {bet['arbiter_fee_pct']}% du pot\n"
-        f"  Deadline       : {bet['deadline']}\n\n"
-        f"Tu pourras trancher quand un opposant aura matche le pari.\n\n"
+        f"  Mise unique : {bet['stake']} CAMP par participant\n"
+        f"  Options     : {opts}\n"
+        f"  Deadline    : {bet['deadline']}\n\n"
+        f"Tu pourras trancher quand la deadline approche ou des qu'il y a\n"
+        f"assez de participants pour rendre le verdict significatif.\n\n"
         f"Voir le pari :\n  {FRONTEND_URL}/paris/{bet['id']}\n\n"
         f"--\nCamplongCoin (notif auto)\n"
     )
     _send(arbiter_email, subject, body)
 
 
-def send_bet_matched(bet: dict, creator_email: str, matcher_username: str) -> None:
-    """Previent le creator que quelqu'un a pris son pari."""
-    subject = f"[CamplongCoin] {matcher_username} a pris ton pari #{bet['id']}"
+def send_bet_joined(bet: dict, creator_email: str, joiner_username: str,
+                    option_label: str) -> None:
+    """Previent le createur que quelqu'un vient de rejoindre son pari."""
+    subject = f"[CamplongCoin] {joiner_username} a rejoint ton pari #{bet['id']}"
     body = (
         f"Salut {bet['creator_username']},\n\n"
-        f"{matcher_username} vient de prendre ton pari :\n\n"
+        f"{joiner_username} vient de rejoindre ton pari sur l'option "
+        f"\"{option_label}\" :\n\n"
         f"  \"{bet['statement']}\"\n\n"
-        f"  Pot total   : {bet['stake_creator'] + bet['stake_opponent']} CAMP\n"
-        f"  Ton cote    : {bet['creator_side'].upper()}\n"
-        f"  Deadline    : {bet['deadline']}\n"
-        f"  Arbitre     : {bet['arbiter_username'] or '(admin)'}\n\n"
+        f"  Mise unique     : {bet['stake']} CAMP\n"
+        f"  Participants    : {bet.get('participants_count', '?')}\n"
+        f"  Pot total       : {bet.get('pot_total', '?')} CAMP\n"
+        f"  Deadline        : {bet['deadline']}\n\n"
         f"Voir le pari :\n  {FRONTEND_URL}/paris/{bet['id']}\n\n"
         f"--\nCamplongCoin (notif auto)\n"
     )
     _send(creator_email, subject, body)
 
 
-def send_bet_resolved(bet: dict, user_email: str, username: str) -> None:
+def send_bet_resolved(bet: dict, user_email: str, username: str,
+                      user_won: bool, user_payout: int) -> None:
     """Notifie un participant qu'un pari a ete resolu."""
-    res = bet["resolution"]
-    pot = bet["stake_creator"] + bet["stake_opponent"]
-
-    if res == "void":
-        outcome = "Le pari a ete annule (void). Ta mise t'a ete remboursee."
-    else:
-        winner = (
-            bet["creator_username"]
-            if bet["creator_side"] == res
-            else bet["opponent_username"]
+    if bet.get("resolution_void"):
+        outcome = (
+            f"Le pari a ete annule (void). Ta mise de {bet['stake']} CAMP "
+            f"t'a ete remboursee."
         )
-        if winner == username:
+    else:
+        winning_label = bet.get("winning_label", "(option inconnue)")
+        if user_won:
             outcome = (
-                f"Tu as GAGNE ! Resolution: {res.upper()}, "
-                f"pot {pot} CAMP, payout sur ton wallet."
+                f"Tu as GAGNE ! Option gagnante : {winning_label}. "
+                f"Tu touches {user_payout} CAMP."
             )
         else:
             outcome = (
-                f"Tu as perdu. Resolution: {res.upper()}, "
-                f"le pot ({pot} CAMP) est alle a {winner}."
+                f"Tu as perdu. Option gagnante : {winning_label}. "
+                f"Ta mise de {bet['stake']} CAMP n'a pas ete remboursee."
             )
 
     subject = f"[CamplongCoin] Pari #{bet['id']} resolu"

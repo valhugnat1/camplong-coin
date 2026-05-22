@@ -1,18 +1,17 @@
 // ═══════════════════════════════════════════════════════════
-// CamplongCoin — API client : Paris (bets)
+// CamplongCoin — API client : Paris communautaires
 // ═══════════════════════════════════════════════════════════
 
 import { apiCall } from "./client";
 
 /**
  * Endpoints publics (user authentifié).
+ *
+ * Modele : mise unique fixe, 2 a 6 options par pari (yes_no ou
+ * multi_choice). 1 mise/user/pari. Resolution = arbitre OU 2 votes
+ * communautaires concordants OU admin.
  */
 export const betsApi = {
-  /**
-   * @param {string} token
-   * @param {{status?: 'open'|'matched'|'resolved'|'cancelled'|'expired'|'all',
-   *          category?: string}} params
-   */
   list(token, params = {}) {
     const qs = new URLSearchParams(
       Object.entries(params).filter(([, v]) => v != null && v !== ""),
@@ -24,6 +23,12 @@ export const betsApi = {
     return apiCall(`/bets/${id}`, { token });
   },
 
+  /**
+   * payload :
+   *   { statement, deadline (ISO), type: 'yes_no'|'multi_choice',
+   *     stake, options?: string[], creator_option_index?: number,
+   *     arbiter_username?: string }
+   */
   create(token, payload) {
     return apiCall("/bets", {
       method: "POST",
@@ -32,10 +37,14 @@ export const betsApi = {
     });
   },
 
-  match(token, id) {
-    return apiCall(`/bets/${id}/match`, {
+  /**
+   * Rejoindre un pari sur une option.
+   */
+  join(token, id, optionId) {
+    return apiCall(`/bets/${id}/join`, {
       method: "POST",
       token,
+      body: JSON.stringify({ option_id: optionId }),
     });
   },
 
@@ -47,26 +56,24 @@ export const betsApi = {
   },
 
   /**
-   * @param {'yes'|'no'|'void'} resolution
+   * Resolution arbitre. optionId = null → void.
    */
-  resolve(token, id, resolution) {
+  resolve(token, id, optionId) {
     return apiCall(`/bets/${id}/resolve`, {
       method: "POST",
       token,
-      body: JSON.stringify({ resolution }),
+      body: JSON.stringify({ option_id: optionId }),
     });
   },
 
   /**
-   * Vote du creator ou de l'opponent. Quand les deux votes coincident,
-   * le pari est resolu automatiquement (sans arbitre ni admin).
-   * @param {'yes'|'no'|'void'} resolution
+   * Vote communautaire. optionId = null → vote 'void'.
    */
-  vote(token, id, resolution) {
+  vote(token, id, optionId) {
     return apiCall(`/bets/${id}/vote`, {
       method: "POST",
       token,
-      body: JSON.stringify({ resolution }),
+      body: JSON.stringify({ option_id: optionId }),
     });
   },
 
@@ -86,11 +93,14 @@ export const adminBetsApi = {
     return apiCall(`/admin/bets${qs ? "?" + qs : ""}`, { token });
   },
 
-  resolve(token, id, resolution) {
+  /**
+   * optionId = null → void.
+   */
+  resolve(token, id, optionId) {
     return apiCall(`/admin/bets/${id}/resolve`, {
       method: "POST",
       token,
-      body: JSON.stringify({ resolution }),
+      body: JSON.stringify({ option_id: optionId }),
     });
   },
 

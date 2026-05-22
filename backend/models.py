@@ -1,6 +1,7 @@
 """
 models.py - Schemas SQL (users, transactions, nonces, market_orders,
-bets, app_settings, rng_seeds, coinflip_rounds).
+bets + bet_options + bet_participations + bet_votes,
+app_settings, rng_seeds, coinflip_rounds, roulette_spins, slots_spins).
 
 Chaque table est explicitement associee au schema DB_SCHEMA via __table_args__.
 """
@@ -80,9 +81,11 @@ class MarketOrder(Base):
 
 class Bet(Base):
     """
-    Pari P2P avec arbitre optionnel. Creator pose la mise + la cote ;
-    un autre user (opponent) prend le pari en face. Resolution par l'arbitre
-    designe ou l'admin. Fonds escrowes dans le compte systeme 'bets_escrow'.
+    Pari communautaire. Le createur pose une mise unique fixe + 2 a 6 options
+    (yes/no ou choix multiples). N'importe qui peut rejoindre une option pour
+    le montant defini. Resolution par arbitre, 2 votes communautaires
+    concordants, ou admin. Pot total reparti entre les gagnants au prorata
+    (egal puisque toutes les mises sont identiques).
     """
     __tablename__ = "bets"
     __table_args__ = {"schema": DB_SCHEMA}
@@ -90,37 +93,80 @@ class Bet(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     creator_username = Column(String(64), nullable=False, index=True)
     statement = Column(String(512), nullable=False)
-    category = Column(String(32), nullable=True)
     deadline = Column(DateTime, nullable=False)
 
-    stake_creator = Column(BigInteger, nullable=False)
-    stake_opponent = Column(BigInteger, nullable=False)
-    odds_num = Column(Integer, nullable=False)
-    odds_den = Column(Integer, nullable=False)
-    creator_side = Column(String(8), nullable=False)            # 'yes' | 'no'
+    # 'yes_no' (2 options Oui/Non) | 'multi_choice' (2 a 6 options custom)
+    type = Column(String(16), nullable=False, default="yes_no")
+    # Mise unique pour tous les participants (le createur inclus s'il joue).
+    stake = Column(BigInteger, nullable=False)
 
-    opponent_username = Column(String(64), nullable=True, index=True)
     arbiter_username = Column(String(64), nullable=True, index=True)
-    arbiter_fee_pct = Column(Integer, nullable=False, default=0)
 
-    # 'open' | 'matched' | 'resolved' | 'cancelled' | 'expired'
+    # 'open' | 'resolved' | 'cancelled' | 'expired'
     status = Column(String(16), nullable=False, default="open", index=True)
-    resolution = Column(String(8), nullable=True)               # 'yes' | 'no' | 'void'
+    # Option gagnante (FK bet_options.id). NULL si void (refund) ou pas encore resolu.
+    resolution_option_id = Column(Integer, nullable=True)
+    # True si resolu en "void" (refund de tous les participants).
+    resolution_void = Column(Boolean, nullable=False, default=False)
     resolved_at = Column(DateTime, nullable=True)
     resolved_by = Column(String(64), nullable=True)
 
-    # Resolution amiable : si les deux votes coincident, le pari se resout
-    # sans arbitre ni admin. resolved_by = '__both_players__'.
-    creator_vote = Column(String(8), nullable=True)             # 'yes' | 'no' | 'void'
-    opponent_vote = Column(String(8), nullable=True)
-
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
-    matched_at = Column(DateTime, nullable=True)
 
-    tx_hash_lock_creator = Column(String(66), nullable=True)
-    tx_hash_lock_opponent = Column(String(66), nullable=True)
-    tx_hash_payout_winner = Column(String(66), nullable=True)
-    tx_hash_payout_arbiter = Column(String(66), nullable=True)
+
+class BetOption(Base):
+    """
+    Une option de pari (Oui/Non pour yes_no, A/B/C/... pour multi_choice).
+    """
+    __tablename__ = "bet_options"
+    __table_args__ = {"schema": DB_SCHEMA}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    bet_id = Column(Integer, nullable=False, index=True)
+    label = Column(String(64), nullable=False)
+    position = Column(Integer, nullable=False, default=0)
+
+
+class BetParticipation(Base):
+    """
+    Une mise d'un user sur une option d'un pari. UNIQUE (bet_id, username) :
+    un user ne peut miser qu'une seule fois par pari (sur une seule option).
+    Le montant est toujours egal a bet.stake (denormalise pour faciliter les
+    refunds en cas de void).
+    """
+    __tablename__ = "bet_participations"
+    __table_args__ = {"schema": DB_SCHEMA}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    bet_id = Column(Integer, nullable=False, index=True)
+    option_id = Column(Integer, nullable=False, index=True)
+    username = Column(String(64), nullable=False, index=True)
+    amount = Column(BigInteger, nullable=False)
+    tx_hash_lock = Column(String(66), nullable=True)
+    tx_hash_payout = Column(String(66), nullable=True)
+    joined_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+class BetVote(Base):
+    """
+    Un vote communautaire sur la resolution d'un pari. N'importe quel user
+    (participant ou non) peut voter. UNIQUE (bet_id, voter_username) : un
+    user n'a qu'un vote par pari (modifiable tant que le pari n'est pas
+    resolu).
+
+    option_id = NULL signifie un vote pour "void" (refund de tous).
+    Quand 2 votes pointent vers la meme option_id (ou tous les deux vers NULL),
+    le pari est resolu automatiquement.
+    """
+    __tablename__ = "bet_votes"
+    __table_args__ = {"schema": DB_SCHEMA}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    bet_id = Column(Integer, nullable=False, index=True)
+    voter_username = Column(String(64), nullable=False, index=True)
+    option_id = Column(Integer, nullable=True)   # NULL = vote pour "void"
+    voted_at = Column(DateTime, server_default=func.now(),
+                      onupdate=func.now(), nullable=False)
 
 
 class AppSetting(Base):

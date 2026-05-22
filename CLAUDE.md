@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Reference documents
 
 - `README.md` — what the app does and how to launch it locally (in French).
-- `AGENTS.md` — full technical spec: contract, DB schema, backend modules, frontend layout, **module Paris (P2P bets)**, security model, gotchas. Read this before non-trivial changes.
+- `AGENTS.md` — full technical spec: contract, DB schema, backend modules, frontend layout, **module Paris (community bets)**, security model, gotchas. Read this before non-trivial changes.
 - `EXTENSIONS.md` — spec for the not-yet-implemented modules (poker, bourse du lait). The Paris and Casino (coinflip + roulette + slots) module specs have moved into `AGENTS.md` now that they're shipped.
 - `backend/SETUP_EMAIL.md` — SMTP/Gmail App Password setup.
 
@@ -60,11 +60,11 @@ Consequences that matter when editing code:
 ## Backend layout (`backend/`)
 
 Flat module structure, three routers:
-- `main.py` mounts `routers/users.py` (user-facing, JWT user-auth), `routers/admin.py` (backoffice, JWT admin-auth), and `routers/bets.py` (P2P bets, user-auth).
+- `main.py` mounts `routers/users.py` (user-facing, JWT user-auth), `routers/admin.py` (backoffice, JWT admin-auth), and `routers/bets.py` (community bets, user-auth).
 - `security.py` — `current_user` / `require_admin` deps, Fernet for private-key encryption.
 - `blockchain.py` — singleton `w3` + `contract`, `admin_transfer`, balance helpers, treasury nonce reservation.
 - `services/escrow.py` — `lock`/`release` between users and system accounts. Journalises every move in `transactions` with sentinel usernames like `__bets_escrow__`.
-- `models.py` — tables: `users` (with `account_type`/`system_role`), `transactions`, `nonces`, `market_orders`, `bets`. Treasury/system operations are logged in `transactions` with `from_username`/`to_username = "__treasury__"` / `"__<role>__"`.
+- `models.py` — tables: `users` (with `account_type`/`system_role`), `transactions`, `nonces`, `market_orders`, `bets` + `bet_options` + `bet_participations` + `bet_votes`. Treasury/system operations are logged in `transactions` with `from_username`/`to_username = "__treasury__"` / `"__<role>__"`.
 - `config.py` — env loading; `DB_SCHEMA` defaults to `test`; `BETS` dict mirrors `frontend/src/config.js`.
 
 Two JWT flavors share `JWT_SECRET` (HS256): user tokens (7d, `sub=<username>`), admin tokens (24h, `sub="admin"`, `role="admin"`).
@@ -73,7 +73,7 @@ Two JWT flavors share `JWT_SECRET` (HS256): user tokens (7d, `sub=<username>`), 
 
 - `config.js` — **all business constants live here**: `RATES.campPerEur`, `RATES.feePctBuy` (5% fee applies only to *buys*; sells are free, and the displayed `CAMP · €` value uses `campToEur` without fees because that's the resale value), `PAYMENT` handles, `CHAIN`, `TOKEN`. Helpers `campToEur`, `eurToCampNet`, `formatEur`, `formatNum` are exported from here — use them instead of inline math.
 - `api/client.js` — fetch wrapper with Bearer auto-injection and **global 401 handling**: any 401 logs out the appropriate session (user vs admin) and redirects to login with `?redirect=<current path>`. Don't handle 401 in stores/views.
-- `stores/` — Pinia: `auth` (tokens persisted to localStorage — **only tokens, no username; the current username lives in `wallet.me.username`**), `wallet` (me/users/history), `orders` (admin orders, shared between `AdminView` and `AdminOrdersView` so the pending badge stays in sync), `bets` (open/mine/detail + actions create/match/cancel/resolve/vote).
+- `stores/` — Pinia: `auth` (tokens persisted to localStorage — **only tokens, no username; the current username lives in `wallet.me.username`**), `wallet` (me/users/history), `orders` (admin orders, shared between `AdminView` and `AdminOrdersView` so the pending badge stays in sync), `bets` (open/mine/detail + actions create/join/cancel/resolve/vote).
 - `router/index.js` — meta flags `guest: 'user' | 'admin'`, `needsUser`, `needsAdmin` drive the global `beforeEach` guard. Login views auto-bypass to `/wallet` or `/admin` if already authenticated.
 
 Stack: Vue 3 Composition API with `<script setup>`, Vite 6, Vue Router 4, Pinia. No UI framework — scoped SFC styles plus primitives in `assets/styles/main.css`. Vite alias `@` → `./src`. Mobile-first, responsive down to 360px.
@@ -82,9 +82,9 @@ Stack: Vue 3 Composition API with `<script setup>`, Vite 6, Vue Router 4, Pinia.
 
 - The `adminTransfer` shortcut (skipping ERC-20 `approve`/`transferFrom`) is intentional and central — don't "fix" it back to the standard pattern.
 - The treasury owns the contract on Base Sepolia (Chain ID 84532). Owner compromise = full control of all balances. Acceptable on testnet; would need multi-sig + rate limits + 2FA before mainnet.
-- `__treasury__` is a sentinel username in `transactions.from_username` / `to_username`, not a real row in `users`. Similarly `__bets_escrow__` for escrow moves, and `__admin__` / `__both_players__` appear in `bets.resolved_by`.
+- `__treasury__` is a sentinel username in `transactions.from_username` / `to_username`, not a real row in `users`. Similarly `__bets_escrow__` for escrow moves, and `__admin__` / `__community__` / `__expired__` appear in `bets.resolved_by`.
 - In `/admin/*` routes the `wallet` store is intentionally not loaded — admins don't need a user account, so `wallet.me` being empty there is expected.
 - **Username lookup in Vue views**: use `wallet.me?.username`, never `auth.username` (the auth store only holds tokens). This bit Paris views early; do not repeat.
-- **Migrations**: run each migration script once per schema (`test`, then `prod`). Latest are `migrate_v4_extensions.py` (tables for paris/casino/lait + `account_type` on users), `migrate_v5_bet_votes.py` (creator_vote/opponent_vote on bets), `migrate_v6_app_settings.py` (`app_settings` table for admin-tweakable params, e.g. `coinflip_edge_pct`), and `migrate_v7_slots.py` (table `slots_spins` + slots min/max bet seeds). Follow with `seed_system_accounts.py` after v4.
+- **Migrations**: run each migration script once per schema (`test`, then `prod`). Latest are `migrate_v4_extensions.py` (tables for paris/casino/lait + `account_type` on users), `migrate_v5_bet_votes.py` (legacy bet vote columns, obsoleted by v8), `migrate_v6_app_settings.py` (`app_settings` table for admin-tweakable params, e.g. `coinflip_edge_pct`), `migrate_v7_slots.py` (table `slots_spins` + slots min/max bet seeds), and `migrate_v8_bets_v2.py` (**bets refonte** — drops old single-pair bet table and creates new community-bet schema: `bets` + `bet_options` + `bet_participations` + `bet_votes`; refund manually first). Follow with `seed_system_accounts.py` after v4.
 - **Dynamic settings**: `app_settings` (key/value VARCHAR table) holds parameters the admin can change from `/admin/casino` without redeploying (currently coinflip edge + min/max bet, roulette min/max bet, slots min/max bet — slots edge is mechanical, hardcoded in `services/slots.py::SYMBOLS`). Read via `services/settings.py::get_int/get_float`; whitelist of writable keys is in the same module. Static deploy-time constants (`BETS`, `RATES`) stay in `backend/config.py` / `frontend/src/config.js`.
 - BaseScan tx link format: `https://sepolia.basescan.org/tx/<hash>`.

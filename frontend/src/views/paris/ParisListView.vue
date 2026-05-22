@@ -4,11 +4,10 @@
       <div class="page-header">
         <div>
           <h1 class="page-title">
-            Paris <span class="dot">·</span> Pronostics
+            Paris <span class="dot">·</span> Entre potes
           </h1>
           <p class="page-sub">
-            Mise sur tes potes. Si t'es plus malin que les autres, tu vas en
-            vivre.
+            Une mise. Plusieurs options. Que les plus malins gagnent.
           </p>
         </div>
         <button
@@ -40,26 +39,6 @@
           <span v-if="myBets.length" class="tab-count">{{
             myBets.length
           }}</span>
-        </button>
-      </div>
-
-      <!-- Filtres -->
-      <div v-if="tab === 'open' && categories.length" class="filters">
-        <button
-          class="chip"
-          :class="{ active: !filter.category }"
-          @click="filter.category = ''"
-        >
-          Tous
-        </button>
-        <button
-          v-for="c in categories"
-          :key="c"
-          class="chip"
-          :class="{ active: filter.category === c }"
-          @click="filter.category = c"
-        >
-          {{ c }}
         </button>
       </div>
 
@@ -114,7 +93,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
 import AppLayout from "@/components/layout/AppLayout.vue";
@@ -126,30 +105,17 @@ const betsStore = useBetsStore();
 const { openBets, myBets, loading, error } = storeToRefs(betsStore);
 
 const tab = ref("open");
-const filter = ref({ category: "" });
 const mineStatusFilter = ref("all");
 
 const MINE_STATUSES = [
   { value: "all", label: "Tous" },
   { value: "open", label: "Ouverts" },
-  { value: "matched", label: "En cours" },
   { value: "resolved", label: "Résolus" },
   { value: "cancelled", label: "Annulés" },
 ];
 
-// Catégories vues parmi les paris ouverts (dédoublonnées)
-const categories = computed(() => {
-  const set = new Set();
-  for (const b of openBets.value) if (b.category) set.add(b.category);
-  return [...set].sort();
-});
-
 const displayed = computed(() => {
-  if (tab.value === "open") {
-    if (!filter.value.category) return openBets.value;
-    return openBets.value.filter((b) => b.category === filter.value.category);
-  }
-  // mine
+  if (tab.value === "open") return openBets.value;
   if (mineStatusFilter.value === "all") return myBets.value;
   return myBets.value.filter((b) => b.status === mineStatusFilter.value);
 });
@@ -284,6 +250,9 @@ onMounted(refresh);
   }
   .page-header .btn-primary {
     width: 100%;
+  }
+  .bets-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

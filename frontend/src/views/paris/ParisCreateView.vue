@@ -2,94 +2,122 @@
   <AppLayout>
     <main class="page fade-in narrow">
       <div class="page-header">
-        <div>
-          <h1 class="page-title">Nouveau pari</h1>
-          <p class="page-sub">
-            Énonce-le. Mise. Trouve quelqu'un d'assez bête pour matcher.
-          </p>
-        </div>
+        <button class="back-link" @click="router.push({ name: 'paris-list' })">
+          ← Paris
+        </button>
+        <h1 class="page-title">Nouveau pari</h1>
+        <p class="page-sub">
+          Pose ton affirmation, fixe la mise, laisse les potes choisir leur camp.
+        </p>
       </div>
 
       <form class="bet-form" @submit.prevent="submit">
-        <!-- ─── Affirmation ────────────────────────────── -->
+        <!-- ─── Affirmation + deadline ──────────────────── -->
         <section class="card">
           <label class="field">
             <span class="field-label">Affirmation</span>
             <textarea
               v-model="form.statement"
               rows="2"
-              placeholder='Ex : "Emile va dire la phrase secrète avant samedi"'
+              placeholder='Ex: "Emile sera en retard à la raclette de samedi"'
               maxlength="512"
               required
             />
             <span class="field-hint mono">{{ form.statement.length }}/512</span>
           </label>
 
-          <div class="field-row">
-            <label class="field">
-              <span class="field-label">Catégorie</span>
-              <select v-model="form.category">
-                <option value="">— Aucune —</option>
-                <option v-for="c in CATEGORIES" :key="c" :value="c">
-                  {{ c }}
-                </option>
-              </select>
-            </label>
+          <label class="field">
+            <span class="field-label">Deadline</span>
+            <input
+              type="datetime-local"
+              v-model="form.deadline"
+              :min="minDeadline"
+              required
+            />
+            <div class="quick-deadlines mono">
+              <button type="button" @click="setDeadline(1)">+1h</button>
+              <button type="button" @click="setDeadline(24)">+1j</button>
+              <button type="button" @click="setDeadline(24 * 7)">+1sem</button>
+              <button type="button" @click="setDeadline(24 * 30)">+1mois</button>
+            </div>
+          </label>
+        </section>
 
-            <label class="field">
-              <span class="field-label">Deadline</span>
+        <!-- ─── Format (yes/no ou multi) ────────────────── -->
+        <section class="card">
+          <div class="section-title">Format</div>
+          <div class="format-toggle">
+            <button
+              type="button"
+              class="format-opt"
+              :class="{ active: form.type === 'yes_no' }"
+              @click="setType('yes_no')"
+            >
+              <span class="format-label">Oui / Non</span>
+              <span class="format-sub">2 options classiques</span>
+            </button>
+            <button
+              type="button"
+              class="format-opt"
+              :class="{ active: form.type === 'multi_choice' }"
+              @click="setType('multi_choice')"
+            >
+              <span class="format-label">Choix multiples</span>
+              <span class="format-sub">2 à 6 options custom</span>
+            </button>
+          </div>
+
+          <div v-if="form.type === 'multi_choice'" class="options-builder">
+            <span class="field-label">Tes options</span>
+            <div
+              v-for="(opt, i) in form.options"
+              :key="i"
+              class="option-row"
+            >
+              <span class="opt-num mono">{{ i + 1 }}.</span>
               <input
-                type="datetime-local"
-                v-model="form.deadline"
-                :min="minDeadline"
-                required
+                type="text"
+                v-model="form.options[i]"
+                maxlength="64"
+                :placeholder="`Option ${i + 1}`"
               />
-              <div class="quick-deadlines mono">
-                <button type="button" @click="setDeadline(1)">+1h</button>
-                <button type="button" @click="setDeadline(24)">+1j</button>
-                <button type="button" @click="setDeadline(24 * 7)">
-                  +1sem
-                </button>
-                <button type="button" @click="setDeadline(24 * 30)">
-                  +1mois
-                </button>
-              </div>
-            </label>
+              <button
+                v-if="form.options.length > 2"
+                type="button"
+                class="opt-remove"
+                @click="removeOption(i)"
+                aria-label="Retirer"
+              >
+                ✕
+              </button>
+            </div>
+            <button
+              type="button"
+              class="btn-ghost btn-add-opt"
+              v-if="form.options.length < BETS.maxOptions"
+              @click="addOption"
+            >
+              + Ajouter une option ({{ form.options.length }}/{{
+                BETS.maxOptions
+              }})
+            </button>
           </div>
         </section>
 
-        <!-- ─── Ma position ────────────────────────────── -->
+        <!-- ─── Mise unique ─────────────────────────────── -->
         <section class="card">
-          <div class="section-title">Ma position</div>
-
-          <div class="side-toggle">
-            <button
-              type="button"
-              class="side-opt yes"
-              :class="{ active: form.creator_side === 'yes' }"
-              @click="form.creator_side = 'yes'"
-            >
-              <span class="side-opt-label">Je parie que c'est</span>
-              <span class="side-opt-value">VRAI</span>
-            </button>
-            <button
-              type="button"
-              class="side-opt no"
-              :class="{ active: form.creator_side === 'no' }"
-              @click="form.creator_side = 'no'"
-            >
-              <span class="side-opt-label">Je parie que c'est</span>
-              <span class="side-opt-value">FAUX</span>
-            </button>
-          </div>
-
+          <div class="section-title">Mise unique</div>
+          <p class="hint">
+            Tout le monde mise pareil pour participer. Le pot total est partagé
+            entre les gagnants à la fin. Tu pourras toi aussi rejoindre une
+            option après création.
+          </p>
           <label class="field">
-            <span class="field-label">Ma mise (CAMP)</span>
             <input
               type="number"
-              v-model.number="form.stake_creator"
-              :min="MIN_STAKE"
-              :max="MAX_STAKE"
+              v-model.number="form.stake"
+              :min="BETS.minStake"
+              :max="BETS.maxStake"
               step="1"
               required
             />
@@ -98,72 +126,15 @@
                 type="button"
                 v-for="a in QUICK_AMOUNTS"
                 :key="a"
-                @click="form.stake_creator = a"
+                @click="form.stake = a"
               >
                 {{ a }}
-              </button>
-              <button type="button" @click="form.stake_creator = maxAffordable">
-                Max ({{ formatNum(maxAffordable) }})
               </button>
             </div>
             <span v-if="walletBalance != null" class="field-hint mono">
               Solde : {{ formatNum(walletBalance) }} CAMP
             </span>
           </label>
-        </section>
-
-        <!-- ─── Cote ────────────────────────────────────── -->
-        <section class="card">
-          <div class="section-title">Cote</div>
-          <p class="hint">
-            Pour 1 CAMP que tu mises, l'adversaire doit miser
-            <b class="mono">{{ ratioStr }}</b> CAMP.
-          </p>
-
-          <div class="cote-presets mono">
-            <button
-              type="button"
-              v-for="p in PRESETS"
-              :key="p.label"
-              class="preset"
-              :class="{
-                active: form.odds_num === p.num && form.odds_den === p.den,
-              }"
-              @click="setOdds(p.num, p.den)"
-            >
-              {{ p.label }}
-            </button>
-            <button
-              type="button"
-              class="preset"
-              :class="{ active: customMode }"
-              @click="customMode = !customMode"
-            >
-              Custom
-            </button>
-          </div>
-
-          <div v-if="customMode" class="custom-cote">
-            <label class="field">
-              <span class="field-label">Toi (num)</span>
-              <input
-                type="number"
-                v-model.number="form.odds_num"
-                min="1"
-                max="100"
-              />
-            </label>
-            <span class="cote-sep">:</span>
-            <label class="field">
-              <span class="field-label">Adversaire (den)</span>
-              <input
-                type="number"
-                v-model.number="form.odds_den"
-                min="1"
-                max="100"
-              />
-            </label>
-          </div>
         </section>
 
         <!-- ─── Arbitre (optionnel) ─────────────────────── -->
@@ -173,43 +144,22 @@
             <span class="optional">optionnel</span>
           </div>
           <p class="hint">
-            Par défaut, toi et l'opposant validez l'issue à deux : si vous
-            êtes d'accord, le pari se résout tout seul. Désigne un arbitre
-            seulement pour départager en cas de désaccord — sinon, c'est moi
-            (Hugo) qui tranche.
+            Sans arbitre : 2 votes communautaires concordants résolvent le
+            pari. Avec arbitre : il tranche tout seul (et ne peut pas
+            participer).
           </p>
-
-          <div class="field-row">
-            <label class="field">
-              <span class="field-label">Qui</span>
-              <select v-model="form.arbiter_username">
-                <option :value="null">
-                  — Personne (accord à deux, sinon admin) —
-                </option>
-                <option
-                  v-for="u in eligibleArbiters"
-                  :key="u.username"
-                  :value="u.username"
-                >
-                  {{ u.username }}
-                </option>
-              </select>
-            </label>
-
-            <label class="field" v-if="form.arbiter_username">
-              <span class="field-label">Commission</span>
-              <div class="fee-input">
-                <input
-                  type="number"
-                  v-model.number="form.arbiter_fee_pct"
-                  min="0"
-                  max="50"
-                  step="1"
-                />
-                <span class="mono">%</span>
-              </div>
-            </label>
-          </div>
+          <label class="field">
+            <select v-model="form.arbiter_username">
+              <option :value="null">— Personne (vote communautaire) —</option>
+              <option
+                v-for="u in eligibleArbiters"
+                :key="u.username"
+                :value="u.username"
+              >
+                {{ u.username }}
+              </option>
+            </select>
+          </label>
         </section>
 
         <!-- ─── Récap ──────────────────────────────────── -->
@@ -217,27 +167,26 @@
           <h3>En clair</h3>
           <div class="recap-grid">
             <div class="recap-row">
-              <span>Ta mise</span>
-              <b class="mono">{{ formatNum(form.stake_creator) }} CAMP</b>
+              <span>Mise par participant</span>
+              <b class="mono">{{ formatNum(form.stake) }} CAMP</b>
             </div>
             <div class="recap-row">
-              <span>Mise adverse requise</span>
-              <b class="mono">{{ formatNum(opponentStake) }} CAMP</b>
+              <span>Options</span>
+              <b>{{ optionLabels.join(" · ") }}</b>
             </div>
             <div class="recap-row">
-              <span>Pot total</span>
-              <b class="mono">{{ formatNum(pot) }} CAMP</b>
+              <span>Résolution</span>
+              <b>
+                {{
+                  form.arbiter_username
+                    ? `Arbitre: ${form.arbiter_username}`
+                    : "Vote communautaire (2 voix)"
+                }}
+              </b>
             </div>
-            <div class="recap-row gain">
-              <span>Si tu gagnes</span>
-              <b class="mono">+{{ formatNum(winnerGain) }} CAMP</b>
-            </div>
-            <div
-              v-if="form.arbiter_username && form.arbiter_fee_pct > 0"
-              class="recap-row"
-            >
-              <span>Commission arbitre</span>
-              <b class="mono">{{ formatNum(arbiterFee) }} CAMP</b>
+            <div class="recap-row hint-row">
+              <span class="dim">Étape suivante</span>
+              <b class="hint-text">Tu pourras y miser après création</b>
             </div>
           </div>
         </section>
@@ -251,7 +200,7 @@
 
         <div v-if="apiError" class="alert error">{{ apiError }}</div>
 
-        <!-- ─── Actions ─────────────────────────────────── -->
+        <!-- ─── Actions (sticky bottom on mobile) ───────── -->
         <div class="actions">
           <button
             type="button"
@@ -265,9 +214,7 @@
             class="btn-primary"
             :disabled="!isValid || submitting"
           >
-            {{
-              submitting ? "Création..." : "Créer le pari & bloquer mes CAMP"
-            }}
+            {{ submitting ? "Création..." : "Créer le pari" }}
           </button>
         </div>
       </form>
@@ -276,15 +223,14 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from "vue";
+import { ref, reactive, computed, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
-import { storeToRefs } from "pinia";
 import AppLayout from "@/components/layout/AppLayout.vue";
 import { useAuthStore } from "@/stores/auth";
 import { useWalletStore } from "@/stores/wallet";
 import { useBetsStore } from "@/stores/bets";
 import { apiCall } from "@/api/client";
-import { formatNum } from "@/config";
+import { formatNum, BETS } from "@/config";
 
 const router = useRouter();
 const auth = useAuthStore();
@@ -293,131 +239,90 @@ const betsStore = useBetsStore();
 
 const walletBalance = computed(() => Number(wallet.me?.balance ?? 0));
 
-// ─── Constantes UI ──────────────────────────────────────
-const MIN_STAKE = 1;
-const MAX_STAKE = 1000;
-
-const CATEGORIES = [
-  "Sport",
-  "Pro",
-  "Crypto",
-  "Lifestyle",
-  "Tech",
-  "Météo",
-  "Politique",
-  "Bullshit",
-  "Autre",
-];
-
 const QUICK_AMOUNTS = [10, 25, 50, 100, 250];
 
-const PRESETS = [
-  { label: "1:1", num: 1, den: 1 }, // 50/50
-  { label: "1:2", num: 1, den: 2 }, // toi favori 2x
-  { label: "1:3", num: 1, den: 3 }, // toi favori 3x
-  { label: "1:5", num: 1, den: 5 }, // toi favori 5x
-  { label: "2:1", num: 2, den: 1 }, // adversaire favori 2x
-  { label: "3:1", num: 3, den: 1 }, // adversaire favori 3x
-];
-
-// ─── État du formulaire ────────────────────────────────
 const form = reactive({
   statement: "",
-  category: "",
   deadline: "",
-  creator_side: "yes",
-  stake_creator: 20,
-  odds_num: 1,
-  odds_den: 1,
+  type: "yes_no",
+  stake: 20,
+  options: ["Oui", "Non"],
   arbiter_username: null,
-  arbiter_fee_pct: 5,
 });
 
-const customMode = ref(false);
 const submitting = ref(false);
 const apiError = ref("");
 const eligibleArbiters = ref([]);
 
-// ─── Calculs dérivés ───────────────────────────────────
-const opponentStake = computed(() => {
-  if (!form.stake_creator || !form.odds_num || !form.odds_den) return 0;
-  return (form.stake_creator * form.odds_den) / form.odds_num;
+// ─── Computed ────────────────────────────────────────────
+const optionLabels = computed(() => {
+  if (form.type === "yes_no") return ["Oui", "Non"];
+  return form.options.map((o) => (o || "").trim());
 });
-
-const pot = computed(() => form.stake_creator + opponentStake.value);
-
-const arbiterFee = computed(() => {
-  if (!form.arbiter_username || !form.arbiter_fee_pct) return 0;
-  return Math.floor((pot.value * form.arbiter_fee_pct) / 100);
-});
-
-const winnerGain = computed(() => opponentStake.value - arbiterFee.value);
-
-const ratioStr = computed(() => {
-  if (form.odds_num === 1) return form.odds_den.toString();
-  return (form.odds_den / form.odds_num).toFixed(2);
-});
-
-const maxAffordable = computed(() =>
-  Math.min(MAX_STAKE, Math.floor(walletBalance.value || 0)),
-);
 
 const minDeadline = computed(() => {
   const d = new Date(Date.now() + 5 * 60 * 1000);
   return d.toISOString().slice(0, 16);
 });
 
-// ─── Validation ────────────────────────────────────────
 const validationErrors = computed(() => {
   const errs = [];
   if (!form.statement.trim()) errs.push("L'affirmation est obligatoire");
-  if (form.statement.length > 512) errs.push("Trop long, max 512 caractères");
   if (!form.deadline) errs.push("Deadline obligatoire");
   else if (new Date(form.deadline) < new Date())
     errs.push("La deadline est déjà passée");
 
-  if (!form.stake_creator || form.stake_creator < MIN_STAKE)
-    errs.push(`Mise minimum : ${MIN_STAKE} CAMP`);
-  if (form.stake_creator > MAX_STAKE)
-    errs.push(`Mise maximum : ${MAX_STAKE} CAMP`);
-  if (form.stake_creator > (walletBalance.value || 0))
-    errs.push(`Solde insuffisant (${formatNum(walletBalance.value)} CAMP)`);
+  if (!form.stake || form.stake < BETS.minStake)
+    errs.push(`Mise minimum : ${BETS.minStake} CAMP`);
+  if (form.stake > BETS.maxStake)
+    errs.push(`Mise maximum : ${BETS.maxStake} CAMP`);
 
-  if (
-    !form.odds_num ||
-    !form.odds_den ||
-    form.odds_num < 1 ||
-    form.odds_den < 1
-  )
-    errs.push("Cote invalide");
-  else if (!Number.isInteger(opponentStake.value))
-    errs.push(
-      `Cette cote produit une mise fractionnaire (${opponentStake.value} CAMP). Ajuste.`,
-    );
-
-  if (form.arbiter_fee_pct < 0 || form.arbiter_fee_pct > 50)
-    errs.push("Commission arbitre entre 0 et 50%");
+  if (form.type === "multi_choice") {
+    const cleaned = optionLabels.value.filter(Boolean);
+    if (cleaned.length < BETS.minOptions)
+      errs.push(`Au moins ${BETS.minOptions} options non vides`);
+    if (cleaned.length > BETS.maxOptions)
+      errs.push(`Maximum ${BETS.maxOptions} options`);
+    // Doublons
+    const lower = cleaned.map((s) => s.toLowerCase());
+    if (new Set(lower).size !== lower.length)
+      errs.push("Pas de doublons dans les options");
+  }
 
   return errs;
 });
 
 const isValid = computed(() => validationErrors.value.length === 0);
 
-// ─── Helpers ───────────────────────────────────────────
-function setOdds(num, den) {
-  form.odds_num = num;
-  form.odds_den = den;
-  customMode.value = false;
+// ─── Helpers ─────────────────────────────────────────────
+function setType(t) {
+  form.type = t;
+  if (t === "yes_no") {
+    form.options = ["Oui", "Non"];
+  } else if (form.options.length < 2) {
+    form.options = ["", ""];
+  }
+}
+
+function addOption() {
+  if (form.options.length < BETS.maxOptions) form.options.push("");
+}
+
+function removeOption(i) {
+  if (form.options.length <= 2) return;
+  form.options.splice(i, 1);
 }
 
 function setDeadline(hoursFromNow) {
   const d = new Date(Date.now() + hoursFromNow * 60 * 60 * 1000);
-  // Format pour datetime-local : YYYY-MM-DDTHH:mm
   const pad = (n) => n.toString().padStart(2, "0");
   form.deadline = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-// ─── Submit ────────────────────────────────────────────
+// Si l'arbitre devient le user, on le retire (impossible techniquement
+// puisque eligibleArbiters exclut déjà me). Pas de logique supplémentaire.
+
+// ─── Submit ──────────────────────────────────────────────
 async function submit() {
   if (!isValid.value) return;
   submitting.value = true;
@@ -425,15 +330,16 @@ async function submit() {
   try {
     const payload = {
       statement: form.statement.trim(),
-      category: form.category || null,
       deadline: new Date(form.deadline).toISOString(),
-      creator_side: form.creator_side,
-      stake_creator: form.stake_creator,
-      odds_num: form.odds_num,
-      odds_den: form.odds_den,
+      type: form.type,
+      stake: form.stake,
       arbiter_username: form.arbiter_username,
-      arbiter_fee_pct: form.arbiter_username ? form.arbiter_fee_pct : 0,
     };
+    if (form.type === "multi_choice") {
+      payload.options = optionLabels.value.filter(Boolean);
+    }
+    // Pas de creator_option_index : le créateur rejoint après création
+    // depuis la vue détail, comme n'importe quel autre user.
     const bet = await betsStore.create(payload);
     router.push({ name: "paris-detail", params: { id: bet.id } });
   } catch (e) {
@@ -443,25 +349,21 @@ async function submit() {
   }
 }
 
-// ─── Init ──────────────────────────────────────────────
+// ─── Init ────────────────────────────────────────────────
 onMounted(async () => {
-  setDeadline(24 * 7); // défaut : dans 1 semaine
-  // Annuaire pour le select arbitre
+  setDeadline(24 * 7);
   try {
     const users = await apiCall("/users", { token: auth.userToken });
     eligibleArbiters.value = users.filter(
       (u) => u.username !== wallet.me?.username,
     );
   } catch (e) {
-    // pas bloquant
+    /* silent */
   }
-  // Rafraîchir le solde affiché (best-effort, on essaie plusieurs methodes possibles)
   try {
     if (typeof wallet.refresh === "function") await wallet.refresh();
-    else if (typeof wallet.load === "function") await wallet.load();
-    else if (typeof wallet.fetch === "function") await wallet.fetch();
   } catch (e) {
-    // pas bloquant
+    /* silent */
   }
 });
 </script>
@@ -470,6 +372,23 @@ onMounted(async () => {
 .narrow {
   max-width: 720px;
   margin: 0 auto;
+  padding-bottom: 6em;
+}
+
+.page-header {
+  margin-bottom: 1.5em;
+}
+.back-link {
+  background: none;
+  border: none;
+  color: var(--text-2);
+  font-size: 0.9em;
+  cursor: pointer;
+  margin-bottom: 0.4em;
+  padding: 0;
+}
+.back-link:hover {
+  color: var(--text-0);
 }
 
 .bet-form {
@@ -482,7 +401,7 @@ onMounted(async () => {
   background: var(--bg-1);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 1.3em;
+  padding: 1.2em 1.3em;
 }
 
 .section-title {
@@ -518,6 +437,7 @@ onMounted(async () => {
   font-size: 0.82em;
   font-weight: 600;
   color: var(--text-1);
+  margin-bottom: 0.5em;
 }
 .field-hint {
   font-size: 0.72em;
@@ -525,23 +445,19 @@ onMounted(async () => {
   align-self: flex-end;
 }
 
-.field-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.9em;
-}
-
 textarea,
 input[type="number"],
+input[type="text"],
 input[type="datetime-local"],
 select {
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0.65em 0.8em;
-  font-size: 0.95em;
+  padding: 0.7em 0.85em;
+  font-size: 1em;
   color: var(--text-0);
   font-family: inherit;
+  width: 100%;
 }
 textarea {
   resize: vertical;
@@ -565,12 +481,13 @@ select:focus {
 .quick-deadlines button {
   background: var(--bg-2);
   border: 1px solid var(--border);
-  padding: 0.3em 0.7em;
+  padding: 0.35em 0.8em;
   border-radius: var(--radius-sm);
-  font-size: 0.78em;
+  font-size: 0.82em;
   color: var(--text-1);
   cursor: pointer;
   transition: all 0.15s;
+  min-height: 38px;
 }
 .quick-amounts button:hover,
 .quick-deadlines button:hover {
@@ -578,102 +495,84 @@ select:focus {
   color: var(--text-0);
 }
 
-.side-toggle {
+/* ─── Format toggle ─────────────────────────────────── */
+.format-toggle {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 0.5em;
+  gap: 0.6em;
   margin-bottom: 1em;
 }
-.side-opt {
+.format-opt {
   background: var(--bg-2);
   border: 2px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 1em;
+  padding: 1em 0.8em;
   cursor: pointer;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 0.3em;
   transition: all 0.15s;
+  min-height: 60px;
 }
-.side-opt-label {
-  font-size: 0.75em;
+.format-opt:hover {
+  border-color: var(--border-strong);
+}
+.format-opt.active {
+  border-color: var(--violet);
+  background: rgba(154, 78, 255, 0.08);
+}
+.format-label {
+  font-weight: 700;
+  font-size: 1em;
+  color: var(--text-0);
+}
+.format-sub {
+  font-size: 0.78em;
   color: var(--text-2);
 }
-.side-opt-value {
-  font-size: 1.4em;
-  font-weight: 800;
-  letter-spacing: 0.05em;
-}
-.side-opt.yes:hover,
-.side-opt.yes.active {
-  border-color: var(--green);
-  background: rgba(20, 224, 142, 0.08);
-}
-.side-opt.yes.active .side-opt-value {
-  color: var(--green);
-}
 
-.side-opt.no:hover,
-.side-opt.no.active {
-  border-color: var(--red);
-  background: rgba(255, 69, 102, 0.08);
-}
-.side-opt.no.active .side-opt-value {
-  color: var(--red);
-}
-
-.cote-presets {
+/* ─── Options builder ─────────────────────────────────── */
+.options-builder {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.4em;
-  margin-bottom: 0.9em;
+  flex-direction: column;
+  gap: 0.5em;
 }
-.preset {
+.option-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+}
+.opt-num {
+  font-size: 0.85em;
+  color: var(--text-3);
+  width: 1.5em;
+  text-align: right;
+}
+.option-row input {
+  flex: 1;
+}
+.opt-remove {
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0.5em 1em;
-  font-weight: 700;
-  font-size: 0.9em;
-  color: var(--text-1);
+  padding: 0.45em 0.7em;
   cursor: pointer;
-  min-width: 4em;
-  transition: all 0.15s;
-}
-.preset:hover {
-  border-color: var(--border-strong);
-  color: var(--text-0);
-}
-.preset.active {
-  background: var(--violet);
-  border-color: var(--violet);
-  color: white;
-}
-
-.custom-cote {
-  display: flex;
-  align-items: flex-end;
-  gap: 0.7em;
-}
-.custom-cote .field {
-  flex: 1;
-  margin-bottom: 0;
-}
-.cote-sep {
-  font-size: 1.5em;
-  font-weight: 700;
   color: var(--text-2);
-  padding-bottom: 0.5em;
+  min-width: 40px;
+  min-height: 40px;
+}
+.opt-remove:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+.btn-add-opt {
+  margin-top: 0.3em;
+  width: 100%;
 }
 
-.fee-input {
-  display: flex;
-  align-items: center;
-  gap: 0.3em;
-}
-.fee-input input {
-  flex: 1;
+.dim {
+  color: var(--text-3);
 }
 
 .hint {
@@ -682,6 +581,7 @@ select:focus {
   margin-bottom: 0.8em;
 }
 
+/* ─── Récap ───────────────────────────────────────────── */
 .recap {
   background: var(--bg-1);
   border: 1px solid var(--violet);
@@ -713,15 +613,29 @@ select:focus {
   align-items: center;
   padding: 0.3em 0;
   border-bottom: 1px dashed var(--border);
+  gap: 1em;
+  flex-wrap: wrap;
+}
+.recap-row b {
+  text-align: right;
 }
 .recap-row:last-child {
   border-bottom: none;
 }
 .recap-row.gain {
-  color: var(--green);
-  font-size: 1.05em;
+  color: var(--gold);
+  font-size: 1.02em;
   padding-top: 0.6em;
   border-top: 1px solid var(--border);
+}
+.recap-row.hint-row {
+  padding-top: 0.6em;
+  border-top: 1px solid var(--border);
+  font-size: 0.85em;
+}
+.hint-text {
+  color: var(--violet);
+  font-weight: 600;
 }
 
 .alert.error {
@@ -744,17 +658,28 @@ select:focus {
 }
 
 @media (max-width: 640px) {
-  .field-row {
+  .format-toggle {
     grid-template-columns: 1fr;
   }
-  .side-toggle {
-    grid-template-columns: 1fr 1fr;
-  }
+  /* Sticky CTA on mobile */
   .actions {
+    position: sticky;
+    bottom: 0;
+    background: linear-gradient(
+      to top,
+      var(--bg-0) 65%,
+      transparent
+    );
+    padding: 1em 0 0.6em;
+    margin: 0 -1em;
+    padding-left: 1em;
+    padding-right: 1em;
+    z-index: 5;
     flex-direction: column-reverse;
   }
   .actions button {
     width: 100%;
+    min-height: 48px;
   }
 }
 </style>

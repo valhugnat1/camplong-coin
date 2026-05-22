@@ -12,13 +12,12 @@ const props = defineProps({
     type: String,
     required: true,
     validator: (v) =>
-      ["open", "matched", "resolved", "cancelled", "expired"].includes(v),
+      ["open", "resolved", "cancelled", "expired"].includes(v),
   },
 });
 
 const LABELS = {
   open: "Ouvert",
-  matched: "En cours",
   resolved: "Résolu",
   cancelled: "Annulé",
   expired: "Expiré",
@@ -43,10 +42,6 @@ const label = computed(() => LABELS[props.status] || props.status);
 .status-open {
   color: var(--green);
   border-color: rgba(20, 224, 142, 0.3);
-}
-.status-matched {
-  color: var(--gold);
-  border-color: rgba(245, 200, 66, 0.3);
 }
 .status-resolved {
   color: var(--text-2);

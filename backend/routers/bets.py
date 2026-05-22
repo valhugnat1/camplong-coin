@@ -1,10 +1,16 @@
 """
-routers/bets.py - Endpoints user pour les paris P2P.
+routers/bets.py - Endpoints user pour les paris communautaires.
 
 Cycle de vie :
-  open ─ (creator DELETE) ─→ cancelled
-  open ─ (matcher POST /match) ─→ matched ─ (arbiter POST /resolve) ─→ resolved
-  open|matched + cron deadline ─→ expired (refund)
+  open  ──(creator DELETE, si 0 participation)─→ cancelled
+  open  ──(arbiter POST /resolve | community POST /vote x2 concordants
+           | admin)                              ─→ resolved
+  open  + deadline passee + cron                ─→ expired
+
+Modele : mise unique fixe, 2 a 6 options, N participants. Chaque user mise
+au plus une fois (sur une seule option) par pari. Resolution = repartition
+egale du pot total entre les participants de l'option gagnante (le reste de
+division reste dans bets_escrow).
 
 Toutes les routes exigent un JWT user.
 Pattern atomique : la tx on-chain (lock/release) se fait AVANT de toucher
@@ -18,59 +24,156 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_, desc
 
 from database import get_db
-from models import User, Bet
-from schemas import CreateBetIn, ResolveBetIn
+from models import User, Bet, BetOption, BetParticipation, BetVote
+from schemas import CreateBetIn, JoinBetIn, VoteBetIn, ResolveBetIn
 from security import current_user
 from services import escrow
 from email_service import (
-    send_bet_arbiter_assigned, send_bet_matched, send_bet_resolved,
+    send_bet_arbiter_assigned, send_bet_joined, send_bet_resolved,
 )
 from config import BETS
 
 router = APIRouter(tags=["bets"])
 
 BETS_ESCROW_ROLE = "bets_escrow"
-BOTH_PLAYERS_RESOLVED_BY = "__both_players__"
+COMMUNITY_RESOLVED_BY = "__community__"
+ADMIN_RESOLVED_BY = "__admin__"
+EXPIRED_RESOLVED_BY = "__expired__"
 
 
 # ─── Serialisation ─────────────────────────────────────
 
-def _bet_dict(b: Bet, my_role: Optional[str] = None) -> dict:
+def _options_for(db: Session, bet_id: int) -> list[BetOption]:
+    return (
+        db.query(BetOption)
+          .filter(BetOption.bet_id == bet_id)
+          .order_by(BetOption.position, BetOption.id)
+          .all()
+    )
+
+
+def _participations_for(db: Session, bet_id: int) -> list[BetParticipation]:
+    return (
+        db.query(BetParticipation)
+          .filter(BetParticipation.bet_id == bet_id)
+          .order_by(BetParticipation.joined_at, BetParticipation.id)
+          .all()
+    )
+
+
+def _votes_for(db: Session, bet_id: int) -> list[BetVote]:
+    return (
+        db.query(BetVote)
+          .filter(BetVote.bet_id == bet_id)
+          .order_by(BetVote.voted_at, BetVote.id)
+          .all()
+    )
+
+
+def _bet_dict(
+    db: Session,
+    b: Bet,
+    *,
+    me: Optional[str] = None,
+    options: Optional[list[BetOption]] = None,
+    parts: Optional[list[BetParticipation]] = None,
+    votes: Optional[list[BetVote]] = None,
+) -> dict:
+    """
+    Serialise un pari avec ses options + participants + votes. Si me est
+    fourni, on ajoute mes infos contextuelles (my_role, my_option_id, my_vote).
+    """
+    if options is None:
+        options = _options_for(db, b.id)
+    if parts is None:
+        parts = _participations_for(db, b.id)
+    if votes is None:
+        votes = _votes_for(db, b.id)
+
+    # ─── Agregats par option (compte + montant total)
+    counts = {o.id: 0 for o in options}
+    sums = {o.id: 0 for o in options}
+    for p in parts:
+        if p.option_id in counts:
+            counts[p.option_id] += 1
+            sums[p.option_id] += p.amount
+
+    options_out = [
+        {
+            "id": o.id,
+            "label": o.label,
+            "position": o.position,
+            "participants_count": counts[o.id],
+            "total_staked": sums[o.id],
+        }
+        for o in options
+    ]
+
+    pot_total = sum(p.amount for p in parts)
+
+    # ─── Winning label (si resolu et pas void)
+    winning_label = None
+    if b.status == "resolved" and not b.resolution_void and b.resolution_option_id:
+        wo = next((o for o in options if o.id == b.resolution_option_id), None)
+        if wo:
+            winning_label = wo.label
+
     out = {
         "id": b.id,
         "creator_username": b.creator_username,
         "statement": b.statement,
-        "category": b.category,
         "deadline": b.deadline.isoformat() + "Z" if b.deadline else None,
-
-        "stake_creator": b.stake_creator,
-        "stake_opponent": b.stake_opponent,
-        "odds_num": b.odds_num,
-        "odds_den": b.odds_den,
-        "creator_side": b.creator_side,
-
-        "opponent_username": b.opponent_username,
+        "type": b.type,
+        "stake": b.stake,
         "arbiter_username": b.arbiter_username,
-        "arbiter_fee_pct": b.arbiter_fee_pct,
-
         "status": b.status,
-        "resolution": b.resolution,
+        "resolution_option_id": b.resolution_option_id,
+        "resolution_void": b.resolution_void,
         "resolved_at": b.resolved_at.isoformat() + "Z" if b.resolved_at else None,
         "resolved_by": b.resolved_by,
-
-        "creator_vote": b.creator_vote,
-        "opponent_vote": b.opponent_vote,
-
+        "winning_label": winning_label,
         "created_at": b.created_at.isoformat() + "Z" if b.created_at else None,
-        "matched_at": b.matched_at.isoformat() + "Z" if b.matched_at else None,
-
-        "tx_hash_lock_creator": b.tx_hash_lock_creator,
-        "tx_hash_lock_opponent": b.tx_hash_lock_opponent,
-        "tx_hash_payout_winner": b.tx_hash_payout_winner,
-        "tx_hash_payout_arbiter": b.tx_hash_payout_arbiter,
+        "options": options_out,
+        "participants_count": len(parts),
+        "pot_total": pot_total,
+        "participants": [
+            {
+                "username": p.username,
+                "option_id": p.option_id,
+                "amount": p.amount,
+                "joined_at": p.joined_at.isoformat() + "Z" if p.joined_at else None,
+                "tx_hash_lock": p.tx_hash_lock,
+                "tx_hash_payout": p.tx_hash_payout,
+            }
+            for p in parts
+        ],
+        "votes_count": len(votes),
+        "votes": [
+            {
+                "voter_username": v.voter_username,
+                "option_id": v.option_id,   # NULL = void
+                "voted_at": v.voted_at.isoformat() + "Z" if v.voted_at else None,
+            }
+            for v in votes
+        ],
     }
-    if my_role is not None:
+
+    if me is not None:
+        my_part = next((p for p in parts if p.username == me), None)
+        my_vote = next((v for v in votes if v.voter_username == me), None)
+        if me == b.creator_username:
+            my_role = "creator"
+        elif me == b.arbiter_username:
+            my_role = "arbiter"
+        elif my_part:
+            my_role = "participant"
+        else:
+            my_role = "observer"
         out["my_role"] = my_role
+        out["my_option_id"] = my_part.option_id if my_part else None
+        out["my_vote_option_id"] = my_vote.option_id if my_vote else None
+        out["my_has_voted"] = my_vote is not None
+
     return out
 
 
@@ -83,6 +186,149 @@ def _user_email(db: Session, username: Optional[str]) -> Optional[str]:
     return row
 
 
+# ─── Helpers metier ────────────────────────────────────
+
+def _ensure_user_exists(db: Session, username: str, label: str) -> User:
+    u = db.get(User, username)
+    if not u or u.account_type != "user":
+        raise HTTPException(400, f"{label} '{username}' introuvable")
+    return u
+
+
+def _try_community_settlement(
+    db: Session, bet: Bet, votes: list[BetVote], background_tasks: BackgroundTasks
+) -> bool:
+    """
+    Si 2 votes au moins pointent vers la meme option_id (ou tous les 2 vers
+    NULL=void), declenche le settlement. Retourne True si settle a eu lieu.
+
+    Le caller doit avoir verrouille la ligne bet (with_for_update). Le commit
+    final reste a sa charge.
+    """
+    # Regroupe les votes par cible : option_id ou 'void' (None)
+    targets: dict = {}
+    for v in votes:
+        k = v.option_id if v.option_id is not None else "void"
+        targets[k] = targets.get(k, 0) + 1
+
+    winner_key = next((k for k, c in targets.items() if c >= 2), None)
+    if winner_key is None:
+        return False
+
+    resolution_option_id = None if winner_key == "void" else winner_key
+    _settle_resolved(
+        db, bet,
+        resolution_option_id=resolution_option_id,
+        resolved_by=COMMUNITY_RESOLVED_BY,
+        background_tasks=background_tasks,
+    )
+    return True
+
+
+def _settle_resolved(
+    db: Session,
+    bet: Bet,
+    *,
+    resolution_option_id: Optional[int],
+    resolved_by: str,
+    background_tasks: Optional[BackgroundTasks] = None,
+) -> None:
+    """
+    Execute les mouvements on-chain et met a jour le statut.
+
+    - resolution_option_id None : void, refund de tous les participants.
+    - resolution_option_id : tous les CAMP du pot vont aux participants de
+      cette option, repartis a part egale (floor). Le reste eventuel reste
+      dans bets_escrow.
+
+    Cas particulier "solo bet" : si l'option gagnante n'a aucun participant
+    OU si une seule option a des participants au moment de la resolution
+    (toutes les mises sont du meme cote), on force le void.
+
+    Le caller commit + notifie. Cette fonction n'appelle pas db.commit().
+    """
+    parts = _participations_for(db, bet.id)
+    options = _options_for(db, bet.id)
+
+    options_with_parts = {p.option_id for p in parts}
+
+    # Force void si solo bet
+    if not bet.resolution_void:
+        if len(options_with_parts) <= 1 and resolution_option_id is not None:
+            # Une seule option a des participants : on void
+            resolution_option_id = None
+        elif resolution_option_id is not None and not any(
+            p.option_id == resolution_option_id for p in parts
+        ):
+            # L'option gagnante n'a pas de participants : void aussi (cas pathologique)
+            resolution_option_id = None
+
+    is_void = resolution_option_id is None
+    bet.resolution_void = is_void
+    bet.resolution_option_id = resolution_option_id
+    bet.status = "resolved"
+    bet.resolved_at = datetime.datetime.utcnow()
+    bet.resolved_by = resolved_by
+
+    # ─── Mouvements on-chain
+    if is_void:
+        # Refund chaque participant
+        for p in parts:
+            u = db.get(User, p.username)
+            if not u:
+                continue
+            tx = escrow.release(
+                db, BETS_ESCROW_ROLE, u, p.amount,
+                f"bet #{bet.id} void refund",
+            )
+            p.tx_hash_payout = tx
+    else:
+        winners = [p for p in parts if p.option_id == resolution_option_id]
+        if not winners:
+            # Garde-fou (deja gere ci-dessus). Pas de payout.
+            return
+
+        pot = sum(p.amount for p in parts)
+        share = pot // len(winners)   # floor, le reste reste en escrow
+        if share <= 0:
+            # Pari microscopique, pas de payout possible (ne devrait pas
+            # arriver avec stake >= 1 CAMP).
+            return
+
+        for p in winners:
+            u = db.get(User, p.username)
+            if not u:
+                continue
+            tx = escrow.release(
+                db, BETS_ESCROW_ROLE, u, share,
+                f"bet #{bet.id} payout (option #{resolution_option_id})",
+            )
+            p.tx_hash_payout = tx
+
+    # ─── Notifs (best-effort, en background)
+    if background_tasks is not None:
+        # On serialise avec les infos a chaud pour le mail (winning_label,
+        # bet.resolution_void deja a jour).
+        snap = _bet_dict(db, bet, options=options, parts=parts)
+        for p in parts:
+            em = _user_email(db, p.username)
+            if not em:
+                continue
+            user_won = (not is_void) and p.option_id == resolution_option_id
+            payout = 0
+            if is_void:
+                payout = p.amount
+            elif user_won:
+                pot = snap["pot_total"]
+                winners_count = sum(
+                    1 for pp in parts if pp.option_id == resolution_option_id
+                )
+                payout = pot // winners_count if winners_count else 0
+            background_tasks.add_task(
+                send_bet_resolved, snap, em, p.username, user_won, payout,
+            )
+
+
 # ─── Create ────────────────────────────────────────────
 
 @router.post("/bets")
@@ -92,37 +338,53 @@ def create_bet(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    # ─── Validations metier
-    if body.stake_creator < BETS["min_stake"] or body.stake_creator > BETS["max_stake"]:
+    # ─── Validations metier ───────────────────────────────
+    if body.stake < BETS["min_stake"] or body.stake > BETS["max_stake"]:
         raise HTTPException(
             400,
             f"Mise hors limites ({BETS['min_stake']}-{BETS['max_stake']} CAMP)"
         )
 
-    # Deadline future. Comparaison naive UTC.
     deadline = body.deadline.replace(tzinfo=None) if body.deadline.tzinfo else body.deadline
     if deadline <= datetime.datetime.utcnow():
         raise HTTPException(400, "Deadline doit etre dans le futur")
 
-    # Mise opposee derivee de la cote. On refuse les arrondis pour eviter
-    # de payer en fractions de CAMP (la DB stocke en entiers).
-    if (body.stake_creator * body.odds_den) % body.odds_num != 0:
-        raise HTTPException(
-            400, "Cote/mise produit un montant fractionnaire (stake * den % num != 0)"
-        )
-    stake_opponent = body.stake_creator * body.odds_den // body.odds_num
-    if stake_opponent <= 0:
-        raise HTTPException(400, "Mise opposee invalide")
+    # Determine la liste finale des options selon le type
+    if body.type == "yes_no":
+        labels = ["Oui", "Non"]
+    else:
+        if not body.options:
+            raise HTTPException(400, "Options requises pour un pari multi-choix")
+        # Normalisation : strip, dedup, garde l'ordre
+        cleaned = []
+        seen = set()
+        for raw in body.options:
+            s = (raw or "").strip()
+            if not s:
+                continue
+            if s.lower() in seen:
+                continue
+            if len(s) > 64:
+                raise HTTPException(400, f"Option trop longue (max 64 char): {s}")
+            seen.add(s.lower())
+            cleaned.append(s)
+        if len(cleaned) < BETS["min_options"] or len(cleaned) > BETS["max_options"]:
+            raise HTTPException(
+                400,
+                f"Entre {BETS['min_options']} et {BETS['max_options']} options "
+                f"distinctes (recu {len(cleaned)})"
+            )
+        labels = cleaned
+
+    if body.creator_option_index is not None:
+        if body.creator_option_index < 0 or body.creator_option_index >= len(labels):
+            raise HTTPException(400, "creator_option_index hors limites")
 
     # Arbitre : doit exister, etre un vrai user, et != creator
     if body.arbiter_username:
         if body.arbiter_username == user.username:
             raise HTTPException(400, "Tu ne peux pas etre ton propre arbitre")
-        arb = db.get(User, body.arbiter_username)
-        if not arb or arb.account_type != "user":
-            raise HTTPException(400, f"Arbitre '{body.arbiter_username}' introuvable")
-    elif body.arbiter_fee_pct and body.arbiter_fee_pct > 0:
-        raise HTTPException(400, "Une commission arbitre suppose un arbitre designe")
+        _ensure_user_exists(db, body.arbiter_username, "Arbitre")
 
     # Anti-spam : limite de paris ouverts par user
     open_count = (
@@ -137,38 +399,52 @@ def create_bet(
             f"{BETS['max_open_bets_per_user']}). Annule-en un avant d'en creer un autre."
         )
 
-    # ─── Creation DB (status open, sans tx_hash)
+    # ─── Creation DB
     bet = Bet(
         creator_username=user.username,
         statement=body.statement,
-        category=body.category,
         deadline=deadline,
-        stake_creator=body.stake_creator,
-        stake_opponent=stake_opponent,
-        odds_num=body.odds_num,
-        odds_den=body.odds_den,
-        creator_side=body.creator_side,
+        type=body.type,
+        stake=body.stake,
         arbiter_username=body.arbiter_username,
-        arbiter_fee_pct=body.arbiter_fee_pct or 0,
         status="open",
     )
     db.add(bet)
-    db.flush()  # pour avoir bet.id avant le lock
+    db.flush()
 
-    # ─── Lock on-chain (tx_hash recupere avant le commit DB)
-    try:
-        tx = escrow.lock(
-            db, user, BETS_ESCROW_ROLE, body.stake_creator,
-            f"bet #{bet.id} stake creator",
+    # Options dans l'ordre
+    created_options: list[BetOption] = []
+    for i, lbl in enumerate(labels):
+        opt = BetOption(bet_id=bet.id, label=lbl, position=i)
+        db.add(opt)
+        created_options.append(opt)
+    db.flush()  # pour avoir les ids
+
+    # Participation eventuelle du createur
+    if body.creator_option_index is not None:
+        chosen = created_options[body.creator_option_index]
+        # Lock on-chain (avant le commit DB)
+        try:
+            tx = escrow.lock(
+                db, user, BETS_ESCROW_ROLE, body.stake,
+                f"bet #{bet.id} creator stake (option \"{chosen.label}\")",
+            )
+        except escrow.EscrowError as e:
+            db.rollback()
+            raise HTTPException(400, str(e))
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(500, f"Echec du lock on-chain : {e}")
+
+        part = BetParticipation(
+            bet_id=bet.id,
+            option_id=chosen.id,
+            username=user.username,
+            amount=body.stake,
+            tx_hash_lock=tx,
         )
-    except escrow.EscrowError as e:
-        db.rollback()
-        raise HTTPException(400, str(e))
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(500, f"Echec du lock on-chain : {e}")
+        db.add(part)
 
-    bet.tx_hash_lock_creator = tx
     db.commit()
     db.refresh(bet)
 
@@ -177,52 +453,53 @@ def create_bet(
         arb_email = _user_email(db, bet.arbiter_username)
         if arb_email:
             background_tasks.add_task(
-                send_bet_arbiter_assigned, _bet_dict(bet), arb_email,
+                send_bet_arbiter_assigned,
+                _bet_dict(db, bet, options=created_options),
+                arb_email,
             )
 
-    return _bet_dict(bet)
+    return _bet_dict(db, bet, me=user.username)
 
 
 # ─── List ──────────────────────────────────────────────
 
 @router.get("/bets")
 def list_bets(
-    status: str = Query("all", pattern="^(all|open|matched|resolved|cancelled|expired)$"),
-    category: Optional[str] = Query(None),
-    _user: User = Depends(current_user),
+    status: str = Query("all", pattern="^(all|open|resolved|cancelled|expired)$"),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
     q = db.query(Bet).order_by(desc(Bet.created_at))
     if status != "all":
         q = q.filter(Bet.status == status)
-    if category:
-        q = q.filter(Bet.category == category)
-    return [_bet_dict(b) for b in q.all()]
+    bets = q.all()
+    # Optimisation : on pourrait batch les options/parts/votes, mais le
+    # volume reste petit pour un site entre potes.
+    return [_bet_dict(db, b, me=user.username) for b in bets]
 
 
 @router.get("/bets/{bet_id}")
 def get_bet(
     bet_id: int,
-    _user: User = Depends(current_user),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
     bet = db.get(Bet, bet_id)
     if not bet:
         raise HTTPException(404, "Pari introuvable")
-    return _bet_dict(bet)
+    return _bet_dict(db, bet, me=user.username)
 
 
-# ─── Match ─────────────────────────────────────────────
+# ─── Join (anyone qui n'a pas deja mise) ───────────────
 
-@router.post("/bets/{bet_id}/match")
-def match_bet(
+@router.post("/bets/{bet_id}/join")
+def join_bet(
     bet_id: int,
+    body: JoinBetIn,
     background_tasks: BackgroundTasks,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
-    # Verrou pessimiste : deux users qui tentent de matcher simultanement,
-    # le second voit status != 'open' et recoit une erreur claire.
     bet = (
         db.query(Bet)
           .filter(Bet.id == bet_id)
@@ -233,17 +510,43 @@ def match_bet(
         raise HTTPException(404, "Pari introuvable")
     if bet.status != "open":
         raise HTTPException(400, f"Pari non disponible (statut: {bet.status})")
-    if bet.creator_username == user.username:
-        raise HTTPException(400, "Tu ne peux pas matcher ton propre pari")
-    if bet.arbiter_username == user.username:
-        raise HTTPException(400, "L'arbitre ne peut pas etre le matcher")
     if bet.deadline <= datetime.datetime.utcnow():
         raise HTTPException(400, "Deadline deja passee")
 
+    # L'arbitre ne peut pas jouer (conflit d'interet)
+    if bet.arbiter_username == user.username:
+        raise HTTPException(400, "L'arbitre ne peut pas participer a son propre pari")
+
+    # Une participation max par user
+    existing = (
+        db.query(BetParticipation)
+          .filter(
+              BetParticipation.bet_id == bet_id,
+              BetParticipation.username == user.username,
+          )
+          .first()
+    )
+    if existing:
+        raise HTTPException(
+            400,
+            "Tu as deja une mise sur ce pari (1 mise max par user). "
+            "Il faut annuler avant de changer d'option (pas encore supporte)."
+        )
+
+    # Verifie que l'option existe et appartient au pari
+    opt = (
+        db.query(BetOption)
+          .filter(BetOption.id == body.option_id, BetOption.bet_id == bet_id)
+          .first()
+    )
+    if not opt:
+        raise HTTPException(400, "Option invalide pour ce pari")
+
+    # Lock on-chain
     try:
         tx = escrow.lock(
-            db, user, BETS_ESCROW_ROLE, bet.stake_opponent,
-            f"bet #{bet.id} stake opponent",
+            db, user, BETS_ESCROW_ROLE, bet.stake,
+            f"bet #{bet.id} stake (option \"{opt.label}\")",
         )
     except escrow.EscrowError as e:
         db.rollback()
@@ -252,24 +555,33 @@ def match_bet(
         db.rollback()
         raise HTTPException(500, f"Echec du lock on-chain : {e}")
 
-    bet.opponent_username = user.username
-    bet.tx_hash_lock_opponent = tx
-    bet.status = "matched"
-    bet.matched_at = datetime.datetime.utcnow()
+    part = BetParticipation(
+        bet_id=bet.id,
+        option_id=opt.id,
+        username=user.username,
+        amount=bet.stake,
+        tx_hash_lock=tx,
+    )
+    db.add(part)
     db.commit()
     db.refresh(bet)
 
-    # Notif creator
-    creator_email = _user_email(db, bet.creator_username)
-    if creator_email:
-        background_tasks.add_task(
-            send_bet_matched, _bet_dict(bet), creator_email, user.username,
-        )
+    # Notif createur si != joiner
+    if bet.creator_username != user.username:
+        creator_email = _user_email(db, bet.creator_username)
+        if creator_email:
+            background_tasks.add_task(
+                send_bet_joined,
+                _bet_dict(db, bet),
+                creator_email,
+                user.username,
+                opt.label,
+            )
 
-    return _bet_dict(bet)
+    return _bet_dict(db, bet, me=user.username)
 
 
-# ─── Cancel (creator only, only if open) ───────────────
+# ─── Cancel ────────────────────────────────────────────
 
 @router.delete("/bets/{bet_id}")
 def cancel_bet(
@@ -277,6 +589,13 @@ def cancel_bet(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
+    """
+    Annulation par le createur.
+    - Si zero participation : annulation simple (status -> cancelled).
+    - Si participations : on void (refund tous), comme un settlement void.
+      Le createur garde la main pour eviter d'avoir besoin de l'admin pour
+      un pari ou personne n'a engage.
+    """
     bet = (
         db.query(Bet)
           .filter(Bet.id == bet_id)
@@ -290,12 +609,28 @@ def cancel_bet(
     if bet.status != "open":
         raise HTTPException(400, f"Pari non annulable (statut: {bet.status})")
 
-    creator = db.get(User, bet.creator_username)
+    parts = _participations_for(db, bet.id)
+
+    if not parts:
+        # Pas de mise, pas de mouvement
+        bet.status = "cancelled"
+        bet.resolved_at = datetime.datetime.utcnow()
+        bet.resolved_by = user.username
+        db.commit()
+        db.refresh(bet)
+        return _bet_dict(db, bet, me=user.username)
+
+    # Sinon, void refund
     try:
-        escrow.release(
-            db, BETS_ESCROW_ROLE, creator, bet.stake_creator,
-            f"bet #{bet.id} refund cancel",
-        )
+        for p in parts:
+            u = db.get(User, p.username)
+            if not u:
+                continue
+            tx = escrow.release(
+                db, BETS_ESCROW_ROLE, u, p.amount,
+                f"bet #{bet.id} cancel refund",
+            )
+            p.tx_hash_payout = tx
     except escrow.EscrowError as e:
         db.rollback()
         raise HTTPException(400, str(e))
@@ -304,64 +639,15 @@ def cancel_bet(
         raise HTTPException(500, f"Echec du refund on-chain : {e}")
 
     bet.status = "cancelled"
+    bet.resolution_void = True
+    bet.resolved_at = datetime.datetime.utcnow()
+    bet.resolved_by = user.username
     db.commit()
     db.refresh(bet)
-    return _bet_dict(bet)
+    return _bet_dict(db, bet, me=user.username)
 
 
 # ─── Resolve (arbiter only) ────────────────────────────
-
-def _settle_resolved(db: Session, bet: Bet, resolution: str, resolved_by: str) -> None:
-    """
-    Execute les mouvements on-chain associes a une resolution puis met a jour
-    le statut DB. Utilise par /bets/{id}/resolve ET /admin/bets/{id}/resolve.
-
-    Tous les release() font db.add() de Transaction lignes ; le commit final
-    se fait par le caller.
-    """
-    creator = db.get(User, bet.creator_username)
-    opponent = db.get(User, bet.opponent_username) if bet.opponent_username else None
-
-    if resolution == "void":
-        # Refund integral des deux cotes
-        escrow.release(
-            db, BETS_ESCROW_ROLE, creator, bet.stake_creator,
-            f"bet #{bet.id} refund (void)",
-        )
-        if opponent:
-            escrow.release(
-                db, BETS_ESCROW_ROLE, opponent, bet.stake_opponent,
-                f"bet #{bet.id} refund (void)",
-            )
-    else:
-        if not opponent:
-            raise escrow.EscrowError("Pas d'opponent, resolution impossible (utilise void)")
-
-        pot = bet.stake_creator + bet.stake_opponent
-        arbiter_fee = (pot * bet.arbiter_fee_pct) // 100 if bet.arbiter_username else 0
-        winner_payout = pot - arbiter_fee
-
-        winner = creator if bet.creator_side == resolution else opponent
-        tx_w = escrow.release(
-            db, BETS_ESCROW_ROLE, winner, winner_payout,
-            f"bet #{bet.id} winner payout",
-        )
-        bet.tx_hash_payout_winner = tx_w
-
-        if arbiter_fee > 0 and bet.arbiter_username:
-            arbiter = db.get(User, bet.arbiter_username)
-            if arbiter:
-                tx_a = escrow.release(
-                    db, BETS_ESCROW_ROLE, arbiter, arbiter_fee,
-                    f"bet #{bet.id} arbiter fee",
-                )
-                bet.tx_hash_payout_arbiter = tx_a
-
-    bet.status = "resolved"
-    bet.resolution = resolution
-    bet.resolved_at = datetime.datetime.utcnow()
-    bet.resolved_by = resolved_by
-
 
 @router.post("/bets/{bet_id}/resolve")
 def resolve_bet(
@@ -379,15 +665,29 @@ def resolve_bet(
     )
     if not bet:
         raise HTTPException(404, "Pari introuvable")
-    if bet.status != "matched":
+    if bet.status != "open":
         raise HTTPException(400, f"Pari non resolvable (statut: {bet.status})")
     if not bet.arbiter_username:
-        raise HTTPException(403, "Aucun arbitre designe, resolution admin requise")
+        raise HTTPException(403, "Aucun arbitre designe, resolution communautaire ou admin")
     if bet.arbiter_username != user.username:
         raise HTTPException(403, "Tu n'es pas l'arbitre designe")
 
+    if body.option_id is not None:
+        opt = (
+            db.query(BetOption)
+              .filter(BetOption.id == body.option_id, BetOption.bet_id == bet_id)
+              .first()
+        )
+        if not opt:
+            raise HTTPException(400, "Option invalide pour ce pari")
+
     try:
-        _settle_resolved(db, bet, body.resolution, resolved_by=user.username)
+        _settle_resolved(
+            db, bet,
+            resolution_option_id=body.option_id,
+            resolved_by=user.username,
+            background_tasks=background_tasks,
+        )
     except escrow.EscrowError as e:
         db.rollback()
         raise HTTPException(400, str(e))
@@ -397,36 +697,24 @@ def resolve_bet(
 
     db.commit()
     db.refresh(bet)
-
-    # Notifs : les deux parties
-    for u_name in (bet.creator_username, bet.opponent_username):
-        em = _user_email(db, u_name)
-        if em:
-            background_tasks.add_task(
-                send_bet_resolved, _bet_dict(bet), em, u_name,
-            )
-
-    return _bet_dict(bet)
+    return _bet_dict(db, bet, me=user.username)
 
 
-# ─── Vote (resolution amiable) ─────────────────────────
+# ─── Vote (communautaire) ──────────────────────────────
 
 @router.post("/bets/{bet_id}/vote")
 def vote_bet(
     bet_id: int,
-    body: ResolveBetIn,
+    body: VoteBetIn,
     background_tasks: BackgroundTasks,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ):
     """
-    Vote du creator ou de l'opponent sur la resolution. Quand les deux votes
-    coincident, le pari est resolu automatiquement (resolved_by =
-    '__both_players__'), sans arbitre ni admin.
-
-    Un vote peut etre change tant que les deux votes ne coincident pas
-    (on ecrase le precedent). Si l'autre joueur a deja vote pareil, l'appel
-    declenche le settlement immediat dans la meme transaction.
+    Vote communautaire (n'importe quel user). 1 vote par pari par user
+    (modifiable tant que le pari n'est pas resolu). option_id = NULL = void.
+    Quand 2 votes pointent vers la meme cible, le pari est resolu auto
+    (resolved_by = '__community__').
     """
     bet = (
         db.query(Bet)
@@ -436,28 +724,47 @@ def vote_bet(
     )
     if not bet:
         raise HTTPException(404, "Pari introuvable")
-    if bet.status != "matched":
+    if bet.status != "open":
         raise HTTPException(400, f"Pari non votable (statut: {bet.status})")
-    if user.username not in (bet.creator_username, bet.opponent_username):
-        raise HTTPException(403, "Seuls le createur et l'opposant peuvent voter")
+    if bet.arbiter_username:
+        raise HTTPException(
+            400,
+            f"Pari avec arbitre designe ({bet.arbiter_username}), vote communautaire desactive"
+        )
 
-    is_creator = user.username == bet.creator_username
-    if is_creator:
-        bet.creator_vote = body.resolution
+    # Validation option_id (None autorise = vote void)
+    if body.option_id is not None:
+        opt = (
+            db.query(BetOption)
+              .filter(BetOption.id == body.option_id, BetOption.bet_id == bet_id)
+              .first()
+        )
+        if not opt:
+            raise HTTPException(400, "Option invalide pour ce pari")
+
+    # Upsert du vote
+    existing = (
+        db.query(BetVote)
+          .filter(BetVote.bet_id == bet_id, BetVote.voter_username == user.username)
+          .first()
+    )
+    if existing:
+        existing.option_id = body.option_id
+        existing.voted_at = datetime.datetime.utcnow()
     else:
-        bet.opponent_vote = body.resolution
+        db.add(BetVote(
+            bet_id=bet.id,
+            voter_username=user.username,
+            option_id=body.option_id,
+        ))
+    db.flush()
 
-    # Si l'autre cote n'a pas encore vote OU vote different, on enregistre
-    # juste le vote et on attend / on signale le desaccord.
-    other_vote = bet.opponent_vote if is_creator else bet.creator_vote
-    if other_vote is None or other_vote != body.resolution:
-        db.commit()
-        db.refresh(bet)
-        return _bet_dict(bet)
+    # Recharge les votes a jour
+    votes = _votes_for(db, bet.id)
 
-    # Accord → settlement immediat
+    # Tente settlement si accord
     try:
-        _settle_resolved(db, bet, body.resolution, resolved_by=BOTH_PLAYERS_RESOLVED_BY)
+        settled = _try_community_settlement(db, bet, votes, background_tasks)
     except escrow.EscrowError as e:
         db.rollback()
         raise HTTPException(400, str(e))
@@ -467,16 +774,7 @@ def vote_bet(
 
     db.commit()
     db.refresh(bet)
-
-    # Notifs : les deux parties
-    for u_name in (bet.creator_username, bet.opponent_username):
-        em = _user_email(db, u_name)
-        if em:
-            background_tasks.add_task(
-                send_bet_resolved, _bet_dict(bet), em, u_name,
-            )
-
-    return _bet_dict(bet)
+    return _bet_dict(db, bet, me=user.username)
 
 
 # ─── /me/bets ──────────────────────────────────────────
@@ -487,25 +785,24 @@ def list_my_bets(
     db: Session = Depends(get_db),
 ):
     """
-    Tous les paris ou le user est creator / opponent / arbitre.
-    Dedup avec role prioritaire : creator > opponent > arbiter.
+    Tous les paris ou le user est creator, arbitre ou participant.
     """
+    creator_ids = db.query(Bet.id).filter(Bet.creator_username == user.username)
+    arbiter_ids = db.query(Bet.id).filter(Bet.arbiter_username == user.username)
+    part_ids = (
+        db.query(BetParticipation.bet_id)
+          .filter(BetParticipation.username == user.username)
+    )
+
     rows = (
         db.query(Bet)
           .filter(or_(
-              Bet.creator_username == user.username,
-              Bet.opponent_username == user.username,
-              Bet.arbiter_username == user.username,
+              Bet.id.in_(creator_ids),
+              Bet.id.in_(arbiter_ids),
+              Bet.id.in_(part_ids),
           ))
           .order_by(desc(Bet.created_at))
           .all()
     )
 
-    def role_of(b: Bet) -> str:
-        if b.creator_username == user.username:
-            return "creator"
-        if b.opponent_username == user.username:
-            return "opponent"
-        return "arbiter"
-
-    return [_bet_dict(b, my_role=role_of(b)) for b in rows]
+    return [_bet_dict(db, b, me=user.username) for b in rows]
