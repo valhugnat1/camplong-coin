@@ -14,7 +14,7 @@
     </div>
 
     <div v-else>
-      <div v-for="t in history" :key="t.tx_hash" class="tx-row">
+      <div v-for="t in paginated" :key="t.tx_hash" class="tx-row">
         <div class="tx-icon" :class="t.from === meUsername ? 'out' : 'in'">
           {{ t.from === meUsername ? '↗' : '↙' }}
         </div>
@@ -29,15 +29,53 @@
           {{ t.from === meUsername ? '−' : '+' }}{{ formatNum(t.amount) }}
         </div>
       </div>
+
+      <div v-if="totalPages > 1" class="pager">
+        <button
+          class="pager-btn"
+          @click="page = Math.max(1, page - 1)"
+          :disabled="page === 1"
+          aria-label="Page précédente"
+        >←</button>
+        <div class="pager-info mono">
+          {{ page }} / {{ totalPages }}
+        </div>
+        <button
+          class="pager-btn"
+          @click="page = Math.min(totalPages, page + 1)"
+          :disabled="page === totalPages"
+          aria-label="Page suivante"
+        >→</button>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-defineProps({
+import { ref, computed, watch } from 'vue'
+
+const props = defineProps({
   history: { type: Array, required: true },
   meUsername: { type: String, required: true }
 })
+
+const PAGE_SIZE = 8
+const page = ref(1)
+
+const totalPages = computed(() =>
+  Math.max(1, Math.ceil((props.history?.length || 0) / PAGE_SIZE))
+)
+const paginated = computed(() => {
+  const start = (page.value - 1) * PAGE_SIZE
+  return props.history.slice(start, start + PAGE_SIZE)
+})
+
+watch(
+  () => props.history.length,
+  () => {
+    if (page.value > totalPages.value) page.value = totalPages.value
+  }
+)
 
 function formatDate(ts) {
   const d = new Date(ts)
@@ -107,6 +145,41 @@ function formatNum(n) {
 }
 .tx-amount.out { color: var(--red); }
 .tx-amount.in { color: var(--green); }
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1em;
+  margin-top: 1em;
+  padding-top: 1em;
+  border-top: 1px solid var(--border);
+}
+.pager-btn {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 10px;
+  background: var(--bg-2);
+  color: var(--text-0);
+  border: 1px solid var(--border);
+  font-size: 1.1em;
+  display: grid;
+  place-items: center;
+}
+.pager-btn:hover:not(:disabled) {
+  background: var(--bg-3);
+  border-color: var(--border-strong);
+}
+.pager-btn:active:not(:disabled) {
+  transform: scale(0.95);
+}
+.pager-info {
+  color: var(--text-1);
+  font-size: 0.92em;
+  min-width: 4em;
+  text-align: center;
+}
 
 @media (max-width: 640px) {
   .tx-row {

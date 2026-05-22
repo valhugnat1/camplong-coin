@@ -2,10 +2,16 @@
   <AppLayout>
     <main class="page fade-in">
       <div class="casino-hero">
-        <h2>La maison gagne toujours. <span class="gold">Sauf en CAMP.</span></h2>
+        <h2>
+          La maison gagne toujours. <span class="gold">Sauf en CAMP.</span>
+        </h2>
         <p>
-          Roulette, slots, poker. Les jeux arrivent. En attendant, économise pour pouvoir tout perdre.
-          <span class="dim">(disclaimer obligatoire : jouer rend pauvre. sauf si tu gagnes.)</span>
+          Roulette, slots, poker. Les jeux arrivent. En attendant, économise
+          pour pouvoir tout perdre.
+          <span class="dim"
+            >(disclaimer obligatoire : jouer rend pauvre. sauf si tu
+            gagnes.)</span
+          >
         </p>
       </div>
 
@@ -33,7 +39,8 @@
 
       <div class="card friend-tip">
         <div>
-          <b style="color: var(--text-0)">Conseil d'ami :</b> mise petit, gagne petit, perds petit.
+          <b style="color: var(--text-0)">Conseil d'ami :</b> petite mise ,
+          petit gain, petit penis.
         </div>
         <div class="signed">— signé : les statistiques</div>
       </div>
@@ -42,23 +49,64 @@
 </template>
 
 <script setup>
-import AppLayout from '@/components/layout/AppLayout.vue'
+import AppLayout from "@/components/layout/AppLayout.vue";
 
 const games = [
-  { icon: '🪙', name: 'Coinflip',      desc: 'Pile ou face. Pas plus simple. Pas moins addictif.',    rtp: 98.0, to: '/casino/coinflip' },
-  { icon: '🎡', name: 'Roulette',      desc: 'Rouge ou noir. Pair ou impair. Toi ou personne.',       rtp: 97.3, to: '/casino/roulette' },
-  { icon: '🎰', name: 'Slots',         desc: '3 rouleaux, des emojis, du regret. Le classique.',      rtp: 96.2 },
-  { icon: '🃏', name: 'Poker (Texas)', desc: 'Bluffe tes potes. Ruine-toi en famille.',               rtp: 100  },
-  { icon: '🎲', name: 'Dés',           desc: 'Tu mises sur un nombre. Ça tombe. Ou pas.',             rtp: 99.0 },
-  { icon: '💥', name: 'Crash',         desc: 'La fusée décolle. Tu sors quand ? Spoiler : trop tard.', rtp: 99.0 }
-]
+  {
+    icon: "🪙",
+    name: "Coinflip",
+    desc: "Pile ou face. Pas plus simple. Pas moins addictif.",
+    rtp: 98.0,
+    to: "/casino/coinflip",
+  },
+  {
+    icon: "🎡",
+    name: "Roulette",
+    desc: "Rouge ou noir. Pair ou impair. Toi ou personne.",
+    rtp: 97.3,
+    to: "/casino/roulette",
+  },
+  {
+    icon: "🎰",
+    name: "Slots",
+    desc: "3 rouleaux, des emojis, du regret. Le classique.",
+    rtp: 97.7,
+    to: "/casino/slots",
+  },
+  {
+    icon: "🃏",
+    name: "Poker (Texas)",
+    desc: "Bluffe tes potes. Ruine-toi en famille.",
+    rtp: 100,
+  },
+  {
+    icon: "🎲",
+    name: "Dés",
+    desc: "Tu mises sur un nombre. Ça tombe. Ou pas.",
+    rtp: 99.0,
+  },
+  {
+    icon: "💥",
+    name: "Crash",
+    desc: "La fusée décolle. Tu sors quand ? Spoiler : trop tard.",
+    rtp: 99.0,
+  },
+];
 </script>
 
 <style scoped>
 .casino-hero {
   background:
-    radial-gradient(circle at 80% 50%, rgba(245, 200, 66, 0.12), transparent 60%),
-    radial-gradient(circle at 20% 50%, rgba(255, 69, 102, 0.1), transparent 60%),
+    radial-gradient(
+      circle at 80% 50%,
+      rgba(245, 200, 66, 0.12),
+      transparent 60%
+    ),
+    radial-gradient(
+      circle at 20% 50%,
+      rgba(255, 69, 102, 0.1),
+      transparent 60%
+    ),
     linear-gradient(135deg, #14101a 0%, #0d0d14 100%);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
@@ -91,7 +139,7 @@ const games = [
   font-style: italic;
 }
 .casino-hero::after {
-  content: '🎰';
+  content: "🎰";
   position: absolute;
   right: -10px;
   bottom: -40px;
@@ -115,7 +163,9 @@ const games = [
   padding: 1.5em 1.2em;
   min-height: 200px;
   overflow: hidden;
-  transition: transform 0.2s, border-color 0.2s;
+  transition:
+    transform 0.2s,
+    border-color 0.2s;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -147,7 +197,7 @@ const games = [
   letter-spacing: 0.06em;
 }
 .available-badge::before {
-  content: '';
+  content: "";
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -191,7 +241,11 @@ const games = [
 }
 
 @media (max-width: 640px) {
-  .casino-hero { padding: 1.6em 1.3em; }
-  .casino-hero h2 { font-size: 1.7em; }
+  .casino-hero {
+    padding: 1.6em 1.3em;
+  }
+  .casino-hero h2 {
+    font-size: 1.7em;
+  }
 }
 </style>

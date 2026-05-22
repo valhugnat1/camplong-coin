@@ -6,7 +6,7 @@ from eth_account import Account
 from jose import jwt
 
 from database import get_db
-from models import User, Transaction, MarketOrder, Bet, CoinflipRound, RouletteSpin
+from models import User, Transaction, MarketOrder, Bet, CoinflipRound, RouletteSpin, SlotsSpin
 from schemas import (
     AdminLoginIn, CreateUserIn, AmountIn, UpdateOrderIn, ResolveBetIn,
     SettingUpdateIn,
@@ -15,7 +15,7 @@ from security import require_admin, fernet
 from blockchain import admin_transfer, get_balance_camp, get_balance_eth, treasury
 from email_service import send_user_order_done, send_bet_resolved
 from config import ADMIN_PASSWORD, JWT_SECRET
-from services import escrow, coinflip, roulette
+from services import escrow, coinflip, roulette, slots
 from services import settings as settings_svc
 from routers.bets import _bet_dict, _settle_resolved, BETS_ESCROW_ROLE, _user_email
 
@@ -571,15 +571,16 @@ def admin_update_setting(
         if v < 0 or v >= 50:
             raise HTTPException(400, "edge_pct doit etre dans [0, 50[")
     elif key in ("coinflip_min_bet", "coinflip_max_bet",
-                 "roulette_min_bet", "roulette_max_bet"):
+                 "roulette_min_bet", "roulette_max_bet",
+                 "slots_min_bet", "slots_max_bet"):
         try:
             v = int(value)
         except ValueError:
             raise HTTPException(400, f"{key} doit etre un entier")
         if v <= 0:
             raise HTTPException(400, f"{key} doit etre > 0")
-        # Coherence min <= max sur la meme famille (coinflip ou roulette)
-        family = "coinflip" if key.startswith("coinflip_") else "roulette"
+        # Coherence min <= max sur la meme famille (coinflip/roulette/slots)
+        family = key.rsplit("_", 2)[0]   # "coinflip" | "roulette" | "slots"
         if key.endswith("_min_bet"):
             cur_max = settings_svc.get_int(db, f"{family}_max_bet", 200)
             if v > cur_max:
@@ -667,6 +668,25 @@ def admin_casino_stats(
           .all()
     )
 
+    # ─── Slots stats
+    s_total_spins = db.query(SlotsSpin).count()
+    s_pnl_row = (
+        db.query(
+            sqlfunc.coalesce(sqlfunc.sum(SlotsSpin.bet_amount), 0),
+            sqlfunc.coalesce(sqlfunc.sum(SlotsSpin.payout), 0),
+        ).first()
+    )
+    s_total_bet = int(s_pnl_row[0] or 0)
+    s_total_payout = int(s_pnl_row[1] or 0)
+    s_pnl = s_total_bet - s_total_payout
+
+    s_recent = (
+        db.query(SlotsSpin)
+          .order_by(SlotsSpin.ts.desc())
+          .limit(20)
+          .all()
+    )
+
     return {
         "bank": {
             "role": coinflip.CASINO_BANK_ROLE,
@@ -698,6 +718,21 @@ def admin_casino_stats(
             "min_bet": settings_svc.get_int(db, "roulette_min_bet", 1),
             "max_bet": settings_svc.get_int(db, "roulette_max_bet", 200),
         },
+        "slots": {
+            "spins_total": s_total_spins,
+            "volume_bet": s_total_bet,
+            "volume_payout": s_total_payout,
+            "pnl_camp": s_pnl,
+            "rtp_observed_pct": (
+                round(100 * s_total_payout / s_total_bet, 2) if s_total_bet else None
+            ),
+            # RTP theorique calcule depuis les poids + payouts hardcoded
+            "rtp_theoretical_pct": slots.theoretical_rtp_pct(),
+            "edge_mechanical_pct": round(100 - slots.theoretical_rtp_pct(), 2),
+            "min_bet": settings_svc.get_int(db, "slots_min_bet", 1),
+            "max_bet": settings_svc.get_int(db, "slots_max_bet", 100),
+        },
         "recent_rounds": [coinflip.history_dict(r) for r in recent],
         "recent_spins": [roulette.history_dict(r) for r in r_recent],
+        "recent_slots": [slots.history_dict(r) for r in s_recent],
     }

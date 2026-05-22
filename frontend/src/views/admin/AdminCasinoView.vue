@@ -196,6 +196,76 @@
       </div>
     </section>
 
+    <!-- ─── Settings Slots ─────────────────────────────── -->
+    <section class="card settings-card">
+      <div class="card-header">
+        <h3 class="card-title">🎰 Paramètres des slots</h3>
+      </div>
+      <p class="card-explain dim">
+        L'edge maison des slots est <b>mécanique</b> (~{{ (stats?.slots?.edge_mechanical_pct ?? 2.3) }}%)
+        — bake dans les poids et les payouts (7️⃣7️⃣7️⃣ paye <b>×1000</b>). Ne se
+        configure pas. Tu peux ajuster les limites de mise.
+      </p>
+
+      <div class="settings-grid">
+        <article class="setting-tile">
+          <div class="setting-head">
+            <div class="s-key">Mise minimale</div>
+            <div class="s-current mono">{{ stats?.slots?.min_bet ?? '—' }} CAMP</div>
+          </div>
+          <p class="s-desc">
+            Le plancher d'une mise par spin. Mets <b>5</b> pour éviter les
+            micro-spins qui spammeraient l'historique.
+          </p>
+          <div class="s-edit">
+            <input
+              type="number"
+              step="1"
+              min="1"
+              v-model.number="edit.slots_min_bet"
+              :disabled="saving.slots_min_bet"
+            />
+            <button
+              class="btn-primary btn-sm"
+              :disabled="!canSave('slots_min_bet') || saving.slots_min_bet"
+              @click="save('slots_min_bet')"
+            >
+              {{ saving.slots_min_bet ? '…' : 'Sauver' }}
+            </button>
+          </div>
+        </article>
+
+        <article class="setting-tile">
+          <div class="setting-head">
+            <div class="s-key">Mise maximale</div>
+            <div class="s-current mono">{{ stats?.slots?.max_bet ?? '—' }} CAMP</div>
+          </div>
+          <p class="s-desc">
+            <b class="accent">⚠ Attention :</b> un jackpot 7️⃣7️⃣7️⃣ paye
+            <b>×1000</b> la mise. Une mise max de 100 CAMP = potentiellement
+            100 000 CAMP à sortir de la banque casino sur un seul spin.
+            Garde casino_bank capitalisée en conséquence.
+          </p>
+          <div class="s-edit">
+            <input
+              type="number"
+              step="1"
+              min="1"
+              v-model.number="edit.slots_max_bet"
+              :disabled="saving.slots_max_bet"
+            />
+            <button
+              class="btn-primary btn-sm"
+              :disabled="!canSave('slots_max_bet') || saving.slots_max_bet"
+              @click="save('slots_max_bet')"
+            >
+              {{ saving.slots_max_bet ? '…' : 'Sauver' }}
+            </button>
+          </div>
+        </article>
+      </div>
+    </section>
+
     <!-- ─── Stats globales casino ──────────────────────── -->
     <h3 class="section-h">🪙 Coinflip — stats</h3>
     <section class="stats-grid" v-if="stats">
@@ -322,6 +392,84 @@
       </div>
     </section>
 
+    <!-- ─── Stats Slots ────────────────────────────────── -->
+    <h3 class="section-h">🎰 Slots — stats</h3>
+    <section class="stats-grid" v-if="stats?.slots">
+      <div class="stat-card">
+        <div class="stat-k">PnL slots</div>
+        <div class="stat-v mono" :class="{ positive: stats.slots.pnl_camp >= 0, negative: stats.slots.pnl_camp < 0 }">
+          {{ stats.slots.pnl_camp >= 0 ? '+' : '' }}{{ formatNum(stats.slots.pnl_camp) }}
+        </div>
+        <div class="stat-sub">CAMP cumulés</div>
+        <div class="stat-foot mono dim">
+          Volume misé : {{ formatNum(stats.slots.volume_bet) }}
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-k">RTP observé</div>
+        <div class="stat-v mono">
+          {{ stats.slots.rtp_observed_pct ?? '—' }}<span v-if="stats.slots.rtp_observed_pct !== null">%</span>
+        </div>
+        <div class="stat-sub">
+          théorique : {{ stats.slots.rtp_theoretical_pct }}%
+        </div>
+        <div class="stat-foot mono dim">
+          {{ stats.slots.spins_total }} spin{{ stats.slots.spins_total > 1 ? 's' : '' }}
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-k">Edge mécanique</div>
+        <div class="stat-v mono">{{ stats.slots.edge_mechanical_pct }}%</div>
+        <div class="stat-sub">poids + payouts hardcoded</div>
+        <div class="stat-foot mono dim">verrouillé en code</div>
+      </div>
+    </section>
+
+    <!-- ─── Historique spins Slots ──────────────────────── -->
+    <section v-if="stats?.recent_slots?.length" class="recent-section">
+      <h4 class="recent-title">📜 20 derniers spins slots</h4>
+      <div class="table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>User</th>
+              <th>Rouleaux</th>
+              <th>Combo</th>
+              <th class="ralign">Mise</th>
+              <th class="ralign">Payout</th>
+              <th>Quand</th>
+              <th>Tx</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in stats.recent_slots" :key="r.id" :class="{ won: r.win, lost: !r.win }">
+              <td class="mono">#{{ r.id }}</td>
+              <td>{{ r.username }}</td>
+              <td class="reels-cell">{{ (r.reels || []).map(s => s.emoji).join('') }}</td>
+              <td class="mono">
+                <span v-if="r.win" class="combo-pill won">×{{ r.multiplier }}</span>
+                <span v-else class="dim">—</span>
+              </td>
+              <td class="ralign mono">{{ formatNum(r.bet_amount) }}</td>
+              <td class="ralign mono">
+                <span :class="{ accent: r.payout > 0, dim: !r.payout }">
+                  {{ r.payout ? '+' + formatNum(r.payout) : '0' }}
+                </span>
+              </td>
+              <td class="mono dim">{{ formatShort(r.ts) }}</td>
+              <td class="mono">
+                <a v-if="r.tx_hash_payout" :href="basescan(r.tx_hash_payout)" target="_blank" rel="noreferrer">payout↗</a>
+                <a v-else-if="r.tx_hash_lock" :href="basescan(r.tx_hash_lock)" target="_blank" rel="noreferrer">lock↗</a>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
     <!-- ─── Historique spins Roulette ──────────────────── -->
     <section v-if="stats?.recent_spins?.length" class="recent-section">
       <h4 class="recent-title">📜 20 derniers spins roulette</h4>
@@ -398,6 +546,8 @@ const edit = reactive({
   coinflip_max_bet: 200,
   roulette_min_bet: 1,
   roulette_max_bet: 200,
+  slots_min_bet: 1,
+  slots_max_bet: 100,
 })
 const saving = reactive({
   coinflip_edge_pct: false,
@@ -405,6 +555,8 @@ const saving = reactive({
   coinflip_max_bet: false,
   roulette_min_bet: false,
   roulette_max_bet: false,
+  slots_min_bet: false,
+  slots_max_bet: false,
 })
 
 const bankLow = computed(() => {
@@ -453,6 +605,8 @@ function currentValue(key) {
   if (key === 'coinflip_max_bet') return stats.value.coinflip.max_bet
   if (key === 'roulette_min_bet') return stats.value.roulette?.min_bet
   if (key === 'roulette_max_bet') return stats.value.roulette?.max_bet
+  if (key === 'slots_min_bet') return stats.value.slots?.min_bet
+  if (key === 'slots_max_bet') return stats.value.slots?.max_bet
   return null
 }
 
@@ -473,6 +627,10 @@ async function loadAll() {
     if (s.roulette) {
       edit.roulette_min_bet = Number(s.roulette.min_bet)
       edit.roulette_max_bet = Number(s.roulette.max_bet)
+    }
+    if (s.slots) {
+      edit.slots_min_bet = Number(s.slots.min_bet)
+      edit.slots_max_bet = Number(s.slots.max_bet)
     }
     ordersStore.load('all').catch(() => {})
   } catch (e) {
@@ -506,6 +664,8 @@ function labelOf(key) {
     coinflip_max_bet: 'Mise maximale (coinflip)',
     roulette_min_bet: 'Mise totale minimale (roulette)',
     roulette_max_bet: 'Mise totale maximale (roulette)',
+    slots_min_bet: 'Mise minimale (slots)',
+    slots_max_bet: 'Mise maximale (slots)',
   }[key] || key
 }
 
@@ -707,6 +867,20 @@ onMounted(loadAll)
 .num-pill.red { background: #c4302b; }
 .num-pill.black { background: #1a1a1a; border: 1px solid #2a2a2a; }
 .num-pill.green { background: #0d8050; }
+
+.reels-cell {
+  font-size: 1.2em;
+  letter-spacing: -1px;
+}
+.combo-pill {
+  display: inline-block;
+  font-size: 0.78em;
+  font-weight: 700;
+  padding: 0.18em 0.6em;
+  border-radius: 999px;
+  background: var(--green-soft);
+  color: var(--green);
+}
 
 .page-toolbar {
   display: flex;

@@ -7,7 +7,7 @@
       </div>
 
       <div class="wallet-grid">
-        <BalanceCard :me="wallet.me" :loading="wallet.loading" @refresh="wallet.refresh()" />
+        <BalanceCard :me="wallet.me" :loading="wallet.loading" />
 
         <div class="hype-card">
           <h3 class="hype-title">Le plan, étape par étape</h3>
@@ -21,8 +21,15 @@
           </ol>
         </div>
 
-        <div class="full-width">
-          <SendForm :users="wallet.users" :balance="wallet.me.balance || 0" />
+        <div class="full-width cta-row">
+          <router-link to="/exchange" class="cta-send" role="button">
+            <div class="cta-ic">💸</div>
+            <div class="cta-body">
+              <div class="cta-title">Envoyer des CAMP</div>
+              <div class="cta-sub">Vers un pote, ou en scannant un QR</div>
+            </div>
+            <div class="cta-arrow">→</div>
+          </router-link>
         </div>
 
         <div class="full-width">
@@ -37,7 +44,6 @@
 import { onMounted, computed } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import BalanceCard from '@/components/wallet/BalanceCard.vue'
-import SendForm from '@/components/wallet/SendForm.vue'
 import HistoryList from '@/components/wallet/HistoryList.vue'
 import { useWalletStore } from '@/stores/wallet'
 
@@ -71,6 +77,69 @@ onMounted(() => {
 
 @media (max-width: 880px) {
   .wallet-grid { grid-template-columns: 1fr; }
+}
+
+.cta-row {
+  display: block;
+}
+.cta-send {
+  display: flex;
+  align-items: center;
+  gap: 1em;
+  padding: 1.1em 1.3em;
+  background:
+    radial-gradient(circle at 0% 50%, rgba(255, 122, 0, 0.18), transparent 60%),
+    linear-gradient(180deg, var(--bg-1) 0%, var(--bg-2) 100%);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  text-decoration: none;
+  color: inherit;
+  transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+  position: relative;
+  overflow: hidden;
+}
+.cta-send:hover {
+  transform: translateY(-1px);
+  border-color: var(--camp);
+  box-shadow: 0 10px 30px -10px var(--camp-glow);
+  text-decoration: none;
+}
+.cta-send:active {
+  transform: translateY(0);
+}
+.cta-ic {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  background: var(--camp-soft);
+  display: grid;
+  place-items: center;
+  font-size: 1.6em;
+  flex-shrink: 0;
+}
+.cta-body {
+  flex: 1;
+  min-width: 0;
+}
+.cta-title {
+  font-family: 'Bricolage Grotesque', sans-serif;
+  font-weight: 700;
+  font-size: 1.2em;
+  letter-spacing: -0.01em;
+  margin-bottom: 0.1em;
+}
+.cta-sub {
+  color: var(--text-2);
+  font-size: 0.88em;
+}
+.cta-arrow {
+  font-size: 1.5em;
+  color: var(--camp);
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+.cta-send:hover .cta-arrow {
+  transform: translateX(3px);
 }
 
 .hype-card {

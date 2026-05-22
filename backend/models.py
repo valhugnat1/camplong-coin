@@ -221,3 +221,35 @@ class CoinflipRound(Base):
     settled_at = Column(DateTime, nullable=True)
     tx_hash_lock = Column(String(66), nullable=True)
     tx_hash_payout = Column(String(66), nullable=True)
+
+
+class SlotsSpin(Base):
+    """
+    Un spin de machine a sous (3 rouleaux, single payline, paye sur
+    3-of-a-kind seulement).
+    Provably fair : un commit-reveal RNG par spin, 3 picks ponderes
+    sur le meme combined_hash avec des offsets differents.
+    """
+    __tablename__ = "slots_spins"
+    __table_args__ = {"schema": DB_SCHEMA}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(64), nullable=False, index=True)
+    bet_amount = Column(BigInteger, nullable=False)
+    payout = Column(BigInteger, nullable=False, default=0)
+    win = Column(Boolean, nullable=False, default=False)
+
+    # Symboles sortis, separes par '|' (ex '🍒|🍋|🍒').
+    reels = Column(String(32), nullable=False)
+    # Code combo (ex '3xcherry' ou 'no_match').
+    combo = Column(String(32), nullable=False)
+    # Multiplicateur applique (0 si perdu, 6/14/25/... sinon).
+    multiplier = Column(Integer, nullable=False, default=0)
+
+    client_seed = Column(String(128), nullable=False)
+    rng_seed_id = Column(Integer, nullable=False)
+
+    status = Column(String(16), nullable=False, default="settled")
+    ts = Column(DateTime, server_default=func.now(), nullable=False)
+    tx_hash_lock = Column(String(66), nullable=True)
+    tx_hash_payout = Column(String(66), nullable=True)

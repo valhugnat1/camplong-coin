@@ -201,14 +201,19 @@
 
       <!-- Historique -->
       <section class="history-section">
-        <h3 class="history-title">📜 Tes derniers flips</h3>
+        <div class="history-head">
+          <h3 class="history-title">📜 Tes derniers flips</h3>
+          <span v-if="casino.history.length" class="history-count mono dim">
+            {{ casino.history.length }} flip{{ casino.history.length > 1 ? 's' : '' }}
+          </span>
+        </div>
         <div v-if="!casino.history.length" class="empty-state card">
           <div class="emoji">🪙</div>
           <div>Aucun flip pour l'instant. Lance ta première pièce !</div>
         </div>
         <div v-else class="history-list">
           <article
-            v-for="r in casino.history"
+            v-for="r in pagedHistory"
             :key="r.id"
             class="history-row"
             :class="{ won: r.win, lost: !r.win }"
@@ -231,6 +236,23 @@
             <div class="h-ts mono dim">{{ formatShort(r.ts) }}</div>
           </article>
         </div>
+
+        <!-- Pagination -->
+        <nav v-if="totalPages > 1" class="pager">
+          <button
+            class="pager-btn"
+            :disabled="historyPage <= 1"
+            @click="historyPage--"
+            aria-label="Page précédente"
+          >←</button>
+          <span class="pager-info mono">{{ historyPage }} / {{ totalPages }}</span>
+          <button
+            class="pager-btn"
+            :disabled="historyPage >= totalPages"
+            @click="historyPage++"
+            aria-label="Page suivante"
+          >→</button>
+        </nav>
       </section>
     </main>
   </AppLayout>
@@ -249,6 +271,18 @@ const wallet = useWalletStore()
 const bet = ref(10)
 const choice = ref('heads')
 const verifyOpen = ref(false)
+
+// Pagination de l'historique (client-side : on fetch 50 du back, on
+// tranche par pages de 10 ici).
+const HISTORY_PAGE_SIZE = 10
+const historyPage = ref(1)
+const totalPages = computed(() =>
+  Math.max(1, Math.ceil(casino.history.length / HISTORY_PAGE_SIZE)),
+)
+const pagedHistory = computed(() => {
+  const start = (historyPage.value - 1) * HISTORY_PAGE_SIZE
+  return casino.history.slice(start, start + HISTORY_PAGE_SIZE)
+})
 // Anim states : idle, spinning, revealed
 const animState = ref('idle')
 // Position cible (en degrés sur l'axe Y) - changée par flip()
@@ -328,6 +362,10 @@ async function flip() {
       choice: choice.value,
       clientSeed: makeClientSeed(),
     })
+
+    // Le nouveau flip est en tête de casino.history → on ramène l'user
+    // sur la page 1 pour qu'il voie son résultat sans rien faire.
+    historyPage.value = 1
 
     // Aligne la fin de rotation sur la face réelle :
     // PILE = 0deg, FACE = 180deg (modulo l'accumulation actuelle)
@@ -421,8 +459,13 @@ onMounted(async () => {
 }
 
 .coin-stage {
+  /* Une seule source de vérité pour la taille de la pièce. Toutes les
+     tailles internes (logo, label, emoji) sont en em sur .face avec
+     une font-size dérivée de --coin-size → tout scale ensemble quand
+     la media query change la variable. */
+  --coin-size: 140px;
   perspective: 900px;
-  height: 180px;
+  height: calc(var(--coin-size) + 40px);
   display: grid;
   place-items: center;
   margin-bottom: 1.4em;
@@ -433,8 +476,8 @@ onMounted(async () => {
 }
 .coin {
   position: relative;
-  width: 140px;
-  height: 140px;
+  width: var(--coin-size);
+  height: var(--coin-size);
   transform-style: preserve-3d;
   -webkit-transform-style: preserve-3d;
   transform: rotateY(0deg);
@@ -462,6 +505,10 @@ onMounted(async () => {
   box-shadow:
     inset 0 6px 18px rgba(255, 255, 255, 0.35),
     inset 0 -6px 18px rgba(0, 0, 0, 0.25);
+  /* Base font-size proportionnelle au diamètre de la pièce :
+     ~10% du diamètre. Le contenu (logo, label, stars) est sizé en em
+     sur cette base donc tout reste cohérent quand --coin-size change. */
+  font-size: calc(var(--coin-size) * 0.1);
 }
 .face.heads {
   background:
@@ -665,9 +712,56 @@ onMounted(async () => {
 
 /* ─── Historique ──────────────────────────────────────── */
 .history-section { margin-top: 1.5em; }
+.history-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6em;
+  margin-bottom: 0.8em;
+}
+.history-count { font-size: 0.78em; }
+
+/* Pagination compacte */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6em;
+  margin-top: 0.8em;
+}
+.pager-btn {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-1);
+  font-weight: 700;
+  font-size: 1em;
+  padding: 0;
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.pager-btn:hover:not(:disabled) {
+  border-color: var(--camp);
+  color: var(--camp);
+}
+.pager-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.pager-info {
+  font-size: 0.85em;
+  color: var(--text-2);
+  min-width: 4ch;
+  text-align: center;
+}
+
 .history-title {
   font-size: 1.1em;
-  margin-bottom: 0.8em;
+  margin: 0;
 }
 .history-list {
   display: flex;
@@ -711,8 +805,15 @@ onMounted(async () => {
   .config-item { flex-direction: row; justify-content: space-between; }
   .history-row { grid-template-columns: 28px 1fr 1fr auto; }
   .h-ts { display: none; }
-  .coin { width: 110px; height: 110px; }
-  .face { font-size: 3.2em; }
-  .coin-stage { height: 150px; }
+  /* Une seule variable à changer : .coin et .face suivent automatiquement
+     (largeur, hauteur, font-size base et donc logo/label/stars en em). */
+  .coin-stage { --coin-size: 110px; }
+}
+
+@media (max-width: 380px) {
+  /* iPhone SE / petits Android : on rétrécit encore la pièce.
+     Tout le contenu (logo, label, emoji) suit via la base em. */
+  .coin-stage { --coin-size: 92px; }
+  .face-stars, .face-year { display: none; }   /* trop chargé sur si petit */
 }
 </style>

@@ -19,6 +19,13 @@ const routes = [
     meta: { needsUser: true },
   },
 
+  {
+    path: "/exchange",
+    name: "exchange",
+    component: () => import("@/views/ExchangeView.vue"),
+    meta: { needsUser: true },
+  },
+
   // Paris : liste + création + détail (remplacent ParisView placeholder)
   {
     path: "/paris",
@@ -56,6 +63,12 @@ const routes = [
     path: "/casino/roulette",
     name: "casino-roulette",
     component: () => import("@/views/casino/RouletteView.vue"),
+    meta: { needsUser: true },
+  },
+  {
+    path: "/casino/slots",
+    name: "casino-slots",
+    component: () => import("@/views/casino/SlotsView.vue"),
     meta: { needsUser: true },
   },
   {

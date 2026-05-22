@@ -11,10 +11,10 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import User, CoinflipRound, RouletteSpin
-from schemas import CoinflipPlayIn, RouletteSpinIn
+from models import User, CoinflipRound, RouletteSpin, SlotsSpin
+from schemas import CoinflipPlayIn, RouletteSpinIn, SlotsSpinIn
 from security import current_user
-from services import escrow, coinflip, roulette, settings as settings_svc
+from services import escrow, coinflip, roulette, slots, settings as settings_svc
 
 
 router = APIRouter(tags=["casino"])
@@ -162,3 +162,69 @@ def my_roulette_history(
           .all()
     )
     return [roulette.history_dict(r) for r in rows]
+
+
+# ═══════════════════════════════════════════════════════
+#  Slots (machine a sous, 3 rouleaux, single payline)
+# ═══════════════════════════════════════════════════════
+
+@router.get("/casino/slots/config")
+def get_slots_config(
+    _user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Limites de mise + paytable publique + RTP theorique.
+    L'edge est mecanique (bake dans weights + payouts hardcoded).
+    """
+    return {
+        "min_bet": settings_svc.get_int(db, "slots_min_bet", 1),
+        "max_bet": settings_svc.get_int(db, "slots_max_bet", 100),
+        "rtp_theoretical_pct": slots.theoretical_rtp_pct(),
+        "paytable": slots.paytable(),
+    }
+
+
+@router.post("/casino/slots/spin")
+def spin_slots(
+    body: SlotsSpinIn,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Joue un spin : lock → tirage 3 rouleaux → release si gain.
+    Erreurs metier → 400. Echec on-chain inattendu → 500.
+    """
+    try:
+        result = slots.spin(
+            db, user,
+            bet=body.bet,
+            client_seed=body.client_seed,
+        )
+    except slots.SlotsError as e:
+        db.rollback()
+        raise HTTPException(400, str(e))
+    except escrow.EscrowError as e:
+        db.rollback()
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Echec spin slots : {e}")
+
+    return result.to_dict()
+
+
+@router.get("/me/slots")
+def my_slots_history(
+    limit: int = Query(20, ge=1, le=100),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    rows = (
+        db.query(SlotsSpin)
+          .filter(SlotsSpin.username == user.username)
+          .order_by(SlotsSpin.ts.desc())
+          .limit(limit)
+          .all()
+    )
+    return [slots.history_dict(r) for r in rows]

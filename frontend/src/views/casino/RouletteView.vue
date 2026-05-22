@@ -150,7 +150,8 @@
 
       <!-- Tapis -->
       <div class="layout-card card">
-        <h3 class="layout-title">🎲 Tapis</h3>
+        <h3 class="layout-title">🎲 Tapis <span class="dim swipe-hint">← swipe pour voir tout →</span></h3>
+        <div class="layout-scroll">
         <div class="layout-grid">
           <!-- 0 (occupe 3 lignes à gauche) -->
           <button
@@ -231,9 +232,10 @@
             </div>
           </div>
         </div>
+        </div><!-- /.layout-scroll -->
 
         <div class="layout-legend">
-          <span class="dim">Clic = ajoute le jeton actif. Re-clic = ajoute encore. Shift+clic = retire.</span>
+          <span class="dim">Tap = ajoute le jeton actif. Tap long / shift+clic = retire.</span>
         </div>
       </div>
 
@@ -273,14 +275,19 @@
 
       <!-- Historique -->
       <section class="history-section">
-        <h3 class="history-title">📜 Tes derniers spins</h3>
+        <div class="history-head">
+          <h3 class="history-title">📜 Tes derniers spins</h3>
+          <span v-if="casino.rouletteHistory.length" class="history-count mono dim">
+            {{ casino.rouletteHistory.length }} spin{{ casino.rouletteHistory.length > 1 ? 's' : '' }}
+          </span>
+        </div>
         <div v-if="!casino.rouletteHistory.length" class="empty-state card">
           <div class="emoji">🎡</div>
           <div>Aucun spin pour l'instant. Pose tes jetons et lance la roue !</div>
         </div>
         <div v-else class="history-list">
           <article
-            v-for="r in casino.rouletteHistory"
+            v-for="r in pagedHistory"
             :key="r.id"
             class="history-row"
             :class="{ won: r.net_pnl > 0, lost: r.net_pnl < 0, push: r.net_pnl === 0 }"
@@ -302,6 +309,23 @@
             <div class="h-ts mono dim">{{ formatShort(r.ts) }}</div>
           </article>
         </div>
+
+        <!-- Pagination -->
+        <nav v-if="totalPages > 1" class="pager">
+          <button
+            class="pager-btn"
+            :disabled="historyPage <= 1"
+            @click="historyPage--"
+            aria-label="Page précédente"
+          >←</button>
+          <span class="pager-info mono">{{ historyPage }} / {{ totalPages }}</span>
+          <button
+            class="pager-btn"
+            :disabled="historyPage >= totalPages"
+            @click="historyPage++"
+            aria-label="Page suivante"
+          >→</button>
+        </nav>
       </section>
     </main>
   </AppLayout>
@@ -357,6 +381,17 @@ const bets = reactive({})
 const lastBets = ref(null)
 const verifyOpen = ref(false)
 const wheelRotation = ref(0)
+
+// Pagination de l'historique (client-side : 50 fetch back, 10/page front)
+const HISTORY_PAGE_SIZE = 10
+const historyPage = ref(1)
+const totalPages = computed(() =>
+  Math.max(1, Math.ceil(casino.rouletteHistory.length / HISTORY_PAGE_SIZE)),
+)
+const pagedHistory = computed(() => {
+  const start = (historyPage.value - 1) * HISTORY_PAGE_SIZE
+  return casino.rouletteHistory.slice(start, start + HISTORY_PAGE_SIZE)
+})
 // Spots gagnants du dernier spin : utilise pour faire briller les cases
 // pendant ~2s apres le tirage avant de clear le tapis.
 const winningSpots = ref(new Set())
@@ -497,10 +532,17 @@ async function spin() {
   wheelRotation.value = current + turns * 360 + delta
 
   // ─── Étape 3 : à la fin de l'anim seulement (la roue est arrêtée),
-  //              on révèle le panneau résultat + glow des gagnants.
+  //              on révèle le panneau résultat + glow des gagnants
+  //              ET on commit le résultat (historique + refresh du solde).
+  //              Sans ce délai, la TopBar et "Derniers spins" spoileraient
+  //              le numéro avant la fin de la rotation.
   setTimeout(() => {
     displayResult.value = res
     winningSpots.value = new Set(res.winning_spots || [])
+    casino.commitRouletteResult(res)
+    // Le spin frais est en tête → on revient sur la page 1 pour
+    // qu'il soit visible sans navigation manuelle.
+    historyPage.value = 1
   }, SPIN_DURATION_MS)
   // Puis on clear le tapis pour préparer le prochain spin.
   setTimeout(() => {
@@ -849,7 +891,43 @@ onMounted(async () => {
 
 /* ─── Tapis ───────────────────────────────────────────── */
 .layout-card { margin-bottom: 1.2em; padding: 1.2em; }
-.layout-title { font-size: 1em; margin-bottom: 0.9em; color: var(--text-1); }
+.layout-title {
+  font-size: 1em;
+  margin-bottom: 0.9em;
+  color: var(--text-1);
+  display: flex;
+  align-items: baseline;
+  gap: 0.6em;
+  flex-wrap: wrap;
+}
+.swipe-hint {
+  font-size: 0.72em;
+  font-weight: normal;
+  /* Affiché seulement sur viewport étroit (cf. @media plus bas). */
+  display: none;
+}
+
+/* Container scrollable horizontalement : sur mobile le tapis fait
+   ~440px de min-width et le viewport ~360px, donc on permet au user
+   de swiper plutôt que de tasser les cellules jusqu'a l'illisible. */
+.layout-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  /* Fade-out à droite pour indiquer qu'il y a plus à voir. Activé
+     uniquement quand on overflow (cf. @media). */
+  position: relative;
+}
+.layout-scroll::-webkit-scrollbar {
+  height: 6px;
+}
+.layout-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 3px;
+}
+.layout-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
 
 .layout-grid {
   --num-row-h: 40px;
@@ -861,6 +939,9 @@ onMounted(async () => {
   border-radius: var(--radius-sm);
   border: 1px solid #052414;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  /* min-width plancher : empêche les cellules de devenir illisibles
+     sur viewport étroit. En-dessous, scroll horizontal kick in. */
+  min-width: 440px;
 }
 
 .zero-cell {
@@ -1002,7 +1083,53 @@ onMounted(async () => {
 
 /* ─── Historique ──────────────────────────────────────── */
 .history-section { margin-top: 1.5em; }
-.history-title { font-size: 1.1em; margin-bottom: 0.8em; }
+.history-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6em;
+  margin-bottom: 0.8em;
+}
+.history-title { font-size: 1.1em; margin: 0; }
+.history-count { font-size: 0.78em; }
+
+/* Pagination compacte */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6em;
+  margin-top: 0.8em;
+}
+.pager-btn {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-1);
+  font-weight: 700;
+  font-size: 1em;
+  padding: 0;
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.pager-btn:hover:not(:disabled) {
+  border-color: var(--camp);
+  color: var(--camp);
+}
+.pager-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.pager-info {
+  font-size: 0.85em;
+  color: var(--text-2);
+  min-width: 4ch;
+  text-align: center;
+}
 .history-list { display: flex; flex-direction: column; gap: 0.4em; }
 .history-row {
   display: grid;
@@ -1053,5 +1180,19 @@ onMounted(async () => {
   .wheel-stage { width: 220px; height: 220px; }
   .history-row { grid-template-columns: 32px 1fr 1fr auto; }
   .h-ts { display: none; }
+}
+
+/* Mobile : le tapis devient scrollable horizontalement
+   (sinon les cases ~15px sont illisibles sur 360px de viewport). */
+@media (max-width: 520px) {
+  .layout-card { padding: 0.7em; }
+  /* min-width plancher : ~440px assure ~32px par cellule au minimum. */
+  .layout-grid { min-width: 440px; }
+  .swipe-hint { display: inline; }
+  /* Fade-out à droite qui suggère qu'on peut swiper */
+  .layout-scroll {
+    -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 16px), transparent 100%);
+            mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 16px), transparent 100%);
+  }
 }
 </style>

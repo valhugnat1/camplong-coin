@@ -20,21 +20,17 @@
     <div class="meta">
       <div class="meta-item">
         <div class="k">Ton adresse on-chain</div>
-        <div class="v">
-          <a :href="'https://sepolia.basescan.org/address/' + me.address" target="_blank" rel="noreferrer">
-            {{ me.address }}
-          </a>
+        <div
+          class="v address-tap"
+          :class="{ copied }"
+          @click="copyAddress"
+          role="button"
+          :title="copied ? 'Copié !' : 'Touche pour copier'"
+        >
+          {{ me.address || '—' }}
+          <span class="copy-feedback">{{ copied ? '✓ copié' : 'touche pour copier' }}</span>
         </div>
       </div>
-    </div>
-
-    <div class="actions">
-      <button class="btn-ghost" @click="copyAddress">
-        {{ copied ? '✓ Copié' : '📋 Copier adresse' }}
-      </button>
-      <button class="btn-ghost" @click="$emit('refresh')" :disabled="loading">
-        {{ loading ? '…' : '↻ Rafraîchir' }}
-      </button>
     </div>
   </div>
 </template>
@@ -47,17 +43,15 @@ const props = defineProps({
   me: { type: Object, required: true },
   loading: { type: Boolean, default: false }
 })
-defineEmits(['refresh'])
 
 const copied = ref(false)
 async function copyAddress() {
+  if (!props.me.address) return
   try {
-    await navigator.clipboard.writeText(props.me.address || '')
+    await navigator.clipboard.writeText(props.me.address)
     copied.value = true
     setTimeout(() => (copied.value = false), 1500)
-  } catch (e) {
-    // silencieux
-  }
+  } catch (_) {}
 }
 </script>
 
@@ -204,16 +198,42 @@ async function copyAddress() {
   color: var(--text-1);
   word-break: break-all;
 }
-.meta-item .v a { color: var(--text-1); }
 
-.actions {
-  display: flex;
-  gap: 0.6em;
-  margin-top: 1.4em;
+.address-tap {
+  cursor: pointer;
+  padding: 0.5em 0.7em;
+  margin: -0.2em -0.4em 0;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  user-select: none;
+  -webkit-user-select: none;
+  position: relative;
 }
-.actions button {
-  flex: 1;
-  padding: 0.7em 1em;
+.address-tap:hover {
+  background: var(--bg-2);
+  border-color: var(--border);
+}
+.address-tap:active {
+  background: var(--bg-3);
+}
+.address-tap.copied {
+  background: var(--green-soft);
+  border-color: rgba(20, 224, 142, 0.35);
+  color: var(--text-0);
+}
+.copy-feedback {
+  display: block;
+  margin-top: 0.3em;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.72em;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  color: var(--text-3);
+}
+.address-tap.copied .copy-feedback {
+  color: var(--green);
 }
 
 @media (max-width: 640px) {

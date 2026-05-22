@@ -12,7 +12,7 @@ Document destiné aux développeurs (humains ou agents IA) qui veulent contribue
 4. [Backend](#backend)
 5. [Frontend](#frontend)
 6. [Module Paris (P2P bets)](#module-paris-p2p-bets)
-7. [Module Casino (coinflip + roulette)](#module-casino-coinflip--roulette)
+7. [Module Casino (coinflip + roulette + slots)](#module-casino-coinflip--roulette--slots)
 8. [Sécurité & secrets](#securite--secrets)
 9. [Déploiement](#deploiement)
 10. [Conventions & gotchas](#conventions--gotchas)
@@ -97,7 +97,8 @@ camplong (DB)
 │                      ├── app_settings        (clés/valeurs admin-tweakables)
 │                      ├── rng_seeds           (commit-reveal provably fair)
 │                      ├── coinflip_rounds     (cf. § Module Casino)
-│                      └── roulette_spins      (cf. § Module Casino)
+│                      ├── roulette_spins      (cf. § Module Casino)
+│                      └── slots_spins         (cf. § Module Casino)
 └── schema: prod       (mêmes tables)
 ```
 
@@ -207,6 +208,8 @@ L'utilisateur peut vérifier a posteriori que `sha256(server_seed) == seed_hash`
 
 **`roulette_spins`** — historique des spins de roulette européenne (37 cases). Un spin = N mises agrégées (numéros pleins 35:1, dozens/columns 2:1, even-money 1:1) → **1 lock unique** vers `casino_bank` (somme des mises), **1 payout net unique** si gain > 0. `bets_json` stocke la liste `[{spot, amount}, …]`. L'edge n'est pas configurable (mécanique : 1/37 ≈ 2.70%).
 
+**`slots_spins`** — historique des spins de machine à sous (3 rouleaux, single payline, paye sur 3-of-a-kind uniquement). `reels` = `"🍒|🍋|🍒"` (3 symboles séparés par `|`), `combo` = `"3xcherry"` ou `"no_match"`, `multiplier` = 0 si perdu sinon ×4/×14/×50/×100/×250 selon le symbole. RTP théorique ≈ 90.2 %, edge mécanique ≈ 9.8 % (baked dans les poids + payouts hardcoded). Pas d'edge_pct configurable.
+
 Voir § *Module Casino* pour le détail des flows.
 
 ### Migrations
@@ -215,6 +218,7 @@ Voir § *Module Casino* pour le détail des flows.
 - `migrate_v4_extensions.py` : tables paris + casino + poker + milk + `rng_seeds` + colonnes `account_type` / `system_role` sur users.
 - `migrate_v5_bet_votes.py` : colonnes `creator_vote` / `opponent_vote` sur `bets` pour la résolution amiable.
 - `migrate_v6_app_settings.py` : table `app_settings` + seed des paramètres casino par défaut (`coinflip_edge_pct=2`, `coinflip_min_bet=1`, `coinflip_max_bet=200`, `roulette_min_bet=1`, `roulette_max_bet=200`).
+- `migrate_v7_slots.py` : table `slots_spins` + seed `slots_min_bet=1`, `slots_max_bet=100`.
 
 Chaque script s'applique aux deux schémas par défaut (`test`, puis `prod`) et est ré-exécutable sans effet de bord (CREATE IF NOT EXISTS, ON CONFLICT DO NOTHING, etc.). Lancer ensuite `seed_system_accounts.py` après v4 pour créer les wallets de `casino_bank`, `bets_escrow`, `poker_bank`, `milk_pool_lait_entier`.
 
@@ -231,7 +235,8 @@ backend/
 ├── config.py            # lit .env, expose les constantes statiques (BETS, JWT, …)
 ├── database.py          # engine SQLAlchemy + session + search_path
 ├── models.py            # User, Transaction, Nonce, MarketOrder, Bet,
-│                        # AppSetting, RngSeed, CoinflipRound, RouletteSpin
+│                        # AppSetting, RngSeed,
+│                        # CoinflipRound, RouletteSpin, SlotsSpin
 ├── schemas.py           # tous les Pydantic In/Out
 ├── security.py          # JWT decode, deps current_user / require_admin, Fernet
 ├── blockchain.py        # web3 init, helpers admin_transfer / balanceOf / nonce
@@ -241,19 +246,21 @@ backend/
 │   ├── settings.py      # lecture/écriture des app_settings, defaults de secours
 │   ├── randomness.py    # commit-reveal (sha256) + derive_int
 │   ├── coinflip.py      # play() : lock → tirage → release si gain
-│   └── roulette.py      # spin() : N mises agrégées → 1 lock + 1 payout net
+│   ├── roulette.py      # spin() : N mises agrégées → 1 lock + 1 payout net
+│   └── slots.py         # spin() : 3 picks pondérés indépendants → release si 3-of-kind
 ├── routers/
 │   ├── users.py         # /login, /me, /transfer, /history, /orders, /me/*
 │   ├── admin.py         # /admin/login, /admin/users, /admin/credit|debit,
 │   │                    # /admin/orders, /admin/bets/*,
 │   │                    # /admin/settings/*, /admin/casino/stats
 │   ├── bets.py          # /bets/*, /me/bets, vote/match/cancel/resolve
-│   └── casino.py        # /casino/coinflip/*, /casino/roulette/*,
-│                        # /me/coinflip, /me/roulette
+│   └── casino.py        # /casino/{coinflip,roulette,slots}/*,
+│                        # /me/{coinflip,roulette,slots}
 └── scripts/
     ├── migrate_v4_extensions.py   # tables paris/casino/lait + comptes système
     ├── migrate_v5_bet_votes.py    # colonnes creator_vote / opponent_vote
     ├── migrate_v6_app_settings.py # table app_settings + seed casino defaults
+    ├── migrate_v7_slots.py        # table slots_spins + seed slots min/max bet
     └── seed_system_accounts.py    # crée bets_escrow, casino_bank, poker_bank
 ```
 
@@ -311,6 +318,11 @@ backend/
 | GET     | `/casino/roulette/config`    | user        | min_bet, max_bet, house_edge_pct (2.70%, mécanique)        |
 | POST    | `/casino/roulette/spin`      | user        | Joue 1 spin avec N mises agrégées                          |
 | GET     | `/me/roulette`               | user        | Historique des derniers spins du user                      |
+| GET     | `/casino/slots/config`       | user        | min_bet, max_bet, rtp_theoretical_pct, paytable             |
+| POST    | `/casino/slots/spin`         | user        | Joue 1 spin (3 rouleaux). Lock → tirage → release si 3-of-kind |
+| GET     | `/me/slots`                  | user        | Historique des derniers spins slots                        |
+
+Tous les endpoints `GET /me/{coinflip,roulette,slots}` acceptent `?limit=` (défaut 20, max 100). Le front fetch 50 et pagine côté client (10/page).
 
 Doc auto-générée OpenAPI : `http://localhost:8000/docs`.
 
@@ -332,6 +344,7 @@ Les deux utilisent `JWT_SECRET` et l'algo HS256.
 - **Vite 6** (dev server + bundler, alias `@` = `./src`)
 - **Vue Router 4** (lazy loading par route)
 - **Pinia** (state management)
+- **qrcode** (^1.5.4) : génération des QR pour la page Échange. Scan via `BarcodeDetector` natif (zéro dep côté lecture).
 - Single-file components, scoped CSS, pas de framework UI externe
 - Responsive (mobile-first), tout marche jusqu'à 360px
 
@@ -367,11 +380,13 @@ frontend/src/
 │   │   ├── TopBar.vue           # logo + balance pill + ProfileMenu
 │   │   ├── ProfileMenu.vue      # dropdown profil (Mon profil, MetaMask, Acheter/Vendre, Mes demandes, Logout)
 │   │   ├── Ticker.vue           # ticker scrollant infini (private jokes + market data)
-│   │   └── TabNav.vue           # onglets Wallet/Paris/Casino/Lait
+│   │   └── TabNav.vue           # onglets Wallet/Échange/Paris/Casino/Lait
 │   ├── wallet/
-│   │   ├── BalanceCard.vue      # gros solde CAMP + EUR + conversions (baguettes/bières/raclettes)
-│   │   ├── SendForm.vue
-│   │   └── HistoryList.vue
+│   │   ├── BalanceCard.vue      # gros solde CAMP + EUR + conversions ; adresse on-chain "tap to copy"
+│   │   └── HistoryList.vue      # liste paginée (8 tx/page, prev/next)
+│   ├── exchange/
+│   │   ├── ShowQrLayer.vue      # layer plein écran : QR du handle (encode "camplong:<username>")
+│   │   └── ScanQrLayer.vue      # layer plein écran : caméra → scan QR → saisie montant → POST /transfer
 │   └── admin/
 │       ├── AdminTopBar.vue      # nav admin avec badge nombre de demandes pending
 │       ├── TreasuryBox.vue      # treasury + CAMP en circulation + valeurs EUR
@@ -380,7 +395,8 @@ frontend/src/
 │
 └── views/
     ├── LoginView.vue            # avec coin 3D low-poly animé en background
-    ├── WalletView.vue           # vue principale
+    ├── WalletView.vue           # solde + plan en 6 étapes + CTA "Envoyer des CAMP" → /exchange + historique paginé
+    ├── ExchangeView.vue         # Recevoir (handle + QR) | Envoyer (scan QR ou pote + montant + note)
     ├── CasinoView.vue           # hub casino : tuiles cliquables (coinflip + roulette jouables)
     ├── MilkView.vue             # placeholder Bourse du Lait (chart SVG)
     ├── ProfileView.vue          # email + mot de passe
@@ -392,8 +408,9 @@ frontend/src/
     │   ├── ParisCreateView.vue
     │   └── ParisDetailView.vue
     ├── casino/
-    │   ├── CoinflipView.vue     # pile/face + roue 3D CSS + provably fair
-    │   └── RouletteView.vue     # tapis HTML/CSS + roue qui décélère sur le bon n°
+    │   ├── CoinflipView.vue     # pile/face + pièce 3D CSS + provably fair
+    │   ├── RouletteView.vue     # tapis HTML/CSS + roue qui décélère sur le bon n°
+    │   └── SlotsView.vue        # 3 rouleaux (Web Animations API), 3 lignes visibles
     └── admin/
         ├── AdminLoginView.vue
         ├── AdminView.vue            # treasury + users + bandeau "demandes en attente"
@@ -558,9 +575,9 @@ Le username courant pour les vérifications de rôle (`isCreator`, `isOpponent`,
 
 ---
 
-## Module Casino (coinflip + roulette)
+## Module Casino (coinflip + roulette + slots)
 
-Deux jeux "joueur vs banque" qui réutilisent les mêmes primitives : escrow vers le compte système `casino_bank`, RNG vérifiable commit-reveal, payouts on-chain agrégés en 1 release par partie.
+Trois jeux "joueur vs banque" qui réutilisent les mêmes primitives : escrow vers le compte système `casino_bank`, RNG vérifiable commit-reveal, payouts on-chain agrégés en 1 release par partie.
 
 ### Patterns partagés
 
@@ -606,16 +623,56 @@ Commit + reveal se font dans la même requête HTTP (le user ne voit pas le hash
 - **1 lock unique + 1 payout net unique** : pour éviter N tx on-chain pour N spots, on agrège. `total_bet = sum(amount)` → 1 `escrow.lock`. `total_payout = sum(evaluate_bet(b, outcome))` → 1 `escrow.release` (skip si 0).
 - Table : `roulette_spins`. `bets_json` stocke la liste pour audit a posteriori. `winning_spots` est calculé à la résolution et renvoyé au front pour le glow doré.
 
+### Slots (`services/slots.py`)
+
+- POST `/casino/slots/spin` : `{ bet, client_seed }` → 3 rouleaux tirés sur le même `combined_hash` avec offsets distincts (`sha256(combined+":i") % TOTAL_WEIGHT` pour i ∈ [0,2]). Paye uniquement sur **3-of-a-kind**.
+- Palette (poids / multiplicateur 3-of-a-kind) — hardcodés dans `SYMBOLS` :
+  - 🍒 cherry  : w=8, ×4
+  - 🍋 lemon   : w=4, ×14
+  - 🍊 orange  : w=2, ×50
+  - 🔔 bell    : w=1, ×100
+  - ⭐ star    : w=1, ×250 (jackpot)
+- Total weight = 16. `P(any win) ≈ 14.3 %` (≈ 1 spin sur 7), `RTP ≈ 90.2 %`, edge ≈ 9.8 %. Calculs vérifiables via `slots.theoretical_rtp_pct()`.
+- **Edge non configurable** : pour le changer il faut éditer le tableau `SYMBOLS` dans `services/slots.py`. Seuls `slots_min_bet` / `slots_max_bet` sont tweakables à chaud via `app_settings`. ⚠ Attention : un jackpot ⭐⭐⭐ paye ×250 la mise → avec `slots_max_bet=100`, le payout maxi en cas de jackpot = 25 000 CAMP. Capitaliser `casino_bank` en conséquence.
+- Table : `slots_spins`. Champ `reels` = `"🍒|🍋|🍒"` (3 emojis sep `|`), `combo` = `"3xcherry"` / `"no_match"`, `multiplier` snapshotté au moment du spin.
+
 ### Front (`views/casino/`)
 
-- `CoinflipView.vue` : pièce 3D CSS qui tourne, choix Pile/Face avec jetons codés couleur, panneau "Vérifier le tirage" qui affiche seed_hash/server_seed/combined_hash/formule.
-- `RouletteView.vue` : tapis HTML/CSS (12 colonnes × 3 rangées + 2:1 en bout + dozens + outside), roue européenne SVG-like CSS qui décélère sur 7s en cubic-bezier `(0.04, 0.86, 0.12, 1)` (forward-only, calcul du delta sur la position actuelle). Après l'arrêt : reveal du panneau gain/perte + glow doré 3s sur les cases gagnantes, puis clear automatique du tapis.
-- `stores/casino.js` : Pinia avec deux blocs distincts (coinflip + roulette), `loadConfig` au montage + `loadHistory`, action `play`/`rouletteSpin` qui rafraîchit le wallet après settle.
+- **`CoinflipView.vue`** : pièce 3D CSS qui tourne, choix Pile/Face avec jetons codés couleur, panneau "Vérifier le tirage" (seed_hash / server_seed / combined_hash / formule). Tailles 100 % dérivées d'une CSS var `--coin-size` (140 / 110 / 92 px selon viewport) — pas de cumul accidentel sur mobile.
+- **`RouletteView.vue`** : tapis HTML/CSS (12 colonnes × 3 rangées + 2:1 en bout + dozens + outside), roue européenne CSS qui décélère sur 7 s en cubic-bezier `(0.04, 0.86, 0.12, 1)` (forward-only, calcul du delta sur la position visuelle actuelle). Sur viewport ≤ 520 px le tapis devient **scroll horizontal** (`min-width: 440px` sur la grille + mask fade-out à droite) — sinon les cellules tassent à ~14 px illisibles. Après l'arrêt : reveal du panneau gain/perte + glow doré 3 s sur les cases gagnantes, puis clear automatique du tapis.
+- **`SlotsView.vue`** : 3 rouleaux verticaux animés via **Web Animations API** (`el.animate(...)`, *pas* de transition CSS persistante — sinon le 2e spin ne se rejoue pas). Fenêtre 3 lignes (haut / payline / bas), `--slot-h` CSS var qui descend de 72→62→54 px ; le JS mesure `getBoundingClientRect()` au moment du spin pour calculer le `targetTranslate` au pixel exact quel que soit le viewport. Cascade gauche→droite avec arrêts à 1.8 s / 2.6 s / 3.4 s. Glow doré 2.5 s sur les rouleaux si gain.
+
+#### Pattern "commit-after-anim" (anti-spoiler)
+
+Sans précaution, dès qu'on `await casino.{play,spin}()` la TopBar et la liste "derniers spins" se mettent à jour → ça **spoile** le résultat avant la fin de l'animation. Le store expose donc :
+
+- `slotsSpin()` / `rouletteSpin()` : appel API pur, retourne le `result`. **Ne touche pas** à l'historique ni au wallet.
+- `commitSlotsResult(result)` / `commitRouletteResult(result)` : helpers à appeler par la vue **après** la fin de l'anim → unshift dans l'historique local + `wallet.refresh()`.
+
+Côté vue, on les appelle dans le `setTimeout` qui révèle le panneau de résultat (slots : ~3.6 s après l'API ; roulette : 7 s). Le coinflip suit la même idée mais inline (anim courte 1.4 s).
+
+À chaque commit on remet aussi `historyPage.value = 1` pour que le nouveau résultat soit visible sans navigation manuelle.
+
+#### Pagination historique
+
+Le store fetch `limit=50` pour chaque historique (`/me/{coinflip,roulette,slots}`). Chaque vue tranche ensuite localement par pages de **10** :
+
+```js
+const HISTORY_PAGE_SIZE = 10
+const historyPage = ref(1)
+const totalPages = computed(() => Math.max(1, Math.ceil(items.length / HISTORY_PAGE_SIZE)))
+const pagedHistory = computed(() => items.slice(
+  (historyPage.value - 1) * HISTORY_PAGE_SIZE,
+  historyPage.value * HISTORY_PAGE_SIZE,
+))
+```
+
+Widget Prev/Next 40×40 px (tap-friendly), affiché uniquement si `totalPages > 1`. Si on veut un jour dépasser 50 spins en mémoire, ajouter un param `offset` aux endpoints `/me/{game}` et renvoyer `{items, total}` au lieu de l'array brut.
 
 ### Admin (`views/admin/AdminCasinoView.vue`)
 
-- **Settings éditables** : `coinflip_edge_pct`, `coinflip_min_bet`, `coinflip_max_bet`, `roulette_min_bet`, `roulette_max_bet`. Sauvegarde par champ (bouton "Sauver" actif uniquement si la valeur a changé). Validation backend + preview live du nouveau multiplicateur côté coinflip.
-- **Stats temps réel** : solde `casino_bank`, PnL coinflip et roulette séparément (`volume_bet - volume_payout`), RTP observé vs attendu (`100 - edge_configured` pour coinflip, `100 - edge_mechanical` pour roulette), 20 derniers rounds / spins.
+- **Settings éditables** : `coinflip_edge_pct`, `coinflip_min_bet`, `coinflip_max_bet`, `roulette_min_bet`, `roulette_max_bet`, `slots_min_bet`, `slots_max_bet`. Sauvegarde par champ (bouton "Sauver" actif uniquement si la valeur a changé). Validation backend + preview live du nouveau multiplicateur côté coinflip. **Pas de knob d'edge pour roulette/slots** (mécanique).
+- **Stats temps réel** : solde `casino_bank`, PnL coinflip / roulette / slots séparément (`volume_bet - volume_payout`), RTP observé vs attendu pour chacun (`100 - edge_configured` côté coinflip, `100 - edge_mechanical` côté roulette/slots), 20 derniers rounds / spins par jeu.
 
 ### Concurrence
 
@@ -732,3 +789,13 @@ Ici on veut zéro friction côté user, donc on a fait un raccourci : `adminTran
 ### `user` dans le menu admin
 
 Quand l'admin navigue dans `/admin/*`, le store wallet n'est PAS chargé (parce que c'est lié à la session user). Si l'admin n'a pas aussi un compte user, le `wallet.me` est vide, ce qui est attendu.
+
+### Page Échange — QR send/receive
+
+Pas de nouvel endpoint backend : la page `/exchange` réutilise `POST /transfer` existant pour l'envoi. Particularités frontend :
+
+- **Format QR** : on encode `camplong:<username>` (et pas l'adresse on-chain), parce que `/transfer` prend un `to_username`. Le `ScanQrLayer` accepte aussi un username brut comme tolérance, et refuse net les QR qui ne matchent pas (pas d'envoi à un destinataire arbitraire scanné depuis n'importe où). Pour étendre plus tard (montant pré-rempli, mémo) : passer à un format URI plus riche, ex. `camplong:<username>?amount=10&note=biere`.
+- **Scan** : utilise l'API native `BarcodeDetector` (Chrome Android, Safari iOS 17+). Pas de fallback type `jsqr` — sur navigateur non supporté on affiche un message clair et on désactive le scan. `getUserMedia({ facingMode: 'environment' })` pour la caméra arrière par défaut.
+- **Self-send** : le scan refuse explicitement son propre username (compare avec `wallet.me.username`).
+- Sur Wallet, l'adresse on-chain n'est plus un lien vers BaseScan : c'est une zone tactile qui copie au tap (feedback `✓ copié` 1.5 s). Les anciens boutons "Copier adresse" et "Rafraîchir" ont sauté — le refresh se fait au montage de chaque vue qui a besoin du solde.
+- L'historique (`HistoryList.vue`) est paginé client-side, 8 tx par page. Pas de pagination serveur : `/history` renvoie déjà au max 100 entrées, ça tient en mémoire sans souci.

@@ -18,6 +18,7 @@
 <script setup>
 const tabs = [
   { to: "/wallet", icon: "💼", label: "Wallet" },
+  { to: "/exchange", icon: "💸", label: "Échange" },
   { to: "/paris", icon: "🎯", label: "Paris" },
   { to: "/casino", icon: "🎰", label: "Casino" },
   { to: "/milk", icon: "🥛", label: "Bourse du Lait", badge: "soon" },
@@ -33,6 +34,9 @@ const tabs = [
   gap: 0.25em;
   border-bottom: 1px solid var(--border);
   overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior: contain;
+  touch-action: pan-x;
   scrollbar-width: none;
 }
 .tabs::-webkit-scrollbar {

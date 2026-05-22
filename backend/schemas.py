@@ -90,6 +90,11 @@ class RouletteSpinIn(BaseModel):
     client_seed: str = Field(..., min_length=1, max_length=128)
 
 
+class SlotsSpinIn(BaseModel):
+    bet: int = Field(..., gt=0)
+    client_seed: str = Field(..., min_length=1, max_length=128)
+
+
 # ─── App settings (admin) ──────────────────────────────
 
 class SettingUpdateIn(BaseModel):

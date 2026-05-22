@@ -59,6 +59,27 @@ export const casinoApi = {
   myRouletteHistory(token, limit = 20) {
     return apiCall(`/me/roulette?limit=${limit}`, { token });
   },
+
+  // ─── Slots ──────────────────────────────────────────
+  slotsConfig(token) {
+    return apiCall("/casino/slots/config", { token });
+  },
+
+  /**
+   * @param {string} token
+   * @param {{bet: number, client_seed: string}} payload
+   */
+  slotsSpin(token, payload) {
+    return apiCall("/casino/slots/spin", {
+      method: "POST",
+      token,
+      body: JSON.stringify(payload),
+    });
+  },
+
+  mySlotsHistory(token, limit = 20) {
+    return apiCall(`/me/slots?limit=${limit}`, { token });
+  },
 };
 
 /**

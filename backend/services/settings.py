@@ -28,6 +28,9 @@ DEFAULTS = {
     # Roulette (edge mecanique 2.7%, donc pas d'edge_pct configurable)
     "roulette_min_bet": "1",
     "roulette_max_bet": "200",
+    # Slots (edge mecanique ~2.3% via weights+payouts hardcoded)
+    "slots_min_bet": "1",
+    "slots_max_bet": "100",
 }
 
 # Cles autorisees pour PATCH /admin/settings. Toute autre cle est refusee
