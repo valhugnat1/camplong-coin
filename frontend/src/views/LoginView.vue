@@ -1,5 +1,5 @@
 <template>
-  <div class="login-wrap">
+  <div class="login-wrap" :class="{ splashing }">
     <!-- Coin 3D en background -->
     <div class="bg-coin-wrap" aria-hidden="true">
       <!-- Halo statique (ne tourne pas) -->
@@ -293,8 +293,14 @@
       </div>
     </div>
 
+    <!-- Splash message (visible pendant le chargement) -->
+    <div v-if="splashing" class="splash-msg">
+      <div class="splash-welcome">Bienvenue, {{ form.username }}</div>
+      <div class="splash-sub">Entrée dans le CAMP…</div>
+    </div>
+
     <!-- Login card -->
-    <div class="login-card">
+    <div class="login-card" :class="{ 'fade-out': splashing }">
       <div class="login-logo">
         <div class="logo-mark">C</div>
         <div>
@@ -368,6 +374,7 @@ const wallet = useWalletStore();
 const form = reactive({ username: "", password: "" });
 const loading = ref(false);
 const error = ref("");
+const splashing = ref(false);
 
 const redirectInfo = computed(() => {
   const r = route.query.redirect;
@@ -385,10 +392,12 @@ async function submit() {
     auth.setUserToken(d.token);
     await wallet.refresh();
     const target = String(route.query.redirect || "/wallet");
+    splashing.value = true;
+    loading.value = false;
+    await new Promise((resolve) => setTimeout(resolve, 2400));
     router.push(target);
   } catch (e) {
     error.value = e.message;
-  } finally {
     loading.value = false;
   }
 }
@@ -462,6 +471,119 @@ async function submit() {
   }
   to {
     transform: rotateY(360deg);
+  }
+}
+
+/* ════════════════════════════════════════
+   MODE SPLASH (après login réussi)
+   ════════════════════════════════════════ */
+
+.login-wrap.splashing .bg-coin-rotor {
+  animation: coin-spin 1.4s cubic-bezier(0.4, 0.05, 0.4, 1) infinite;
+}
+
+.login-wrap.splashing .bg-coin-wrap {
+  animation: coin-pop 0.7s cubic-bezier(0.34, 1.4, 0.64, 1) forwards;
+}
+
+.login-wrap.splashing .coin-face {
+  opacity: 1;
+  filter: drop-shadow(0 30px 80px rgba(255, 122, 0, 0.6));
+  transition: opacity 0.5s ease, filter 0.5s ease;
+}
+
+.login-wrap.splashing .coin-edge {
+  opacity: 1;
+  transition: opacity 0.5s ease;
+}
+
+.login-wrap.splashing .bg-coin-glow {
+  animation: glow-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes coin-pop {
+  0% {
+    transform: translate(-50%, -50%) scale(1);
+  }
+  60% {
+    transform: translate(-50%, -50%) scale(1.08);
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(1.04);
+  }
+}
+
+@keyframes glow-pulse {
+  0%, 100% {
+    opacity: 1;
+    filter: blur(20px);
+  }
+  50% {
+    opacity: 1.4;
+    filter: blur(28px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .login-wrap.splashing .bg-coin-rotor,
+  .login-wrap.splashing .bg-coin-wrap,
+  .login-wrap.splashing .bg-coin-glow {
+    animation: none;
+  }
+}
+
+/* ════════════════════════════════════════
+   SPLASH MESSAGE
+   ════════════════════════════════════════ */
+
+.splash-msg {
+  position: absolute;
+  bottom: 12%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  text-align: center;
+  pointer-events: none;
+  animation: splash-msg-in 0.6s ease 0.15s both;
+}
+
+.splash-welcome {
+  font-size: 1.5em;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: 0.02em;
+  text-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.9),
+    0 0 24px rgba(255, 122, 0, 0.5);
+}
+
+.splash-sub {
+  font-size: 0.85em;
+  color: rgba(255, 255, 255, 0.7);
+  margin-top: 0.4em;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
+  animation: splash-sub-blink 1.4s ease-in-out infinite;
+}
+
+@keyframes splash-msg-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 10px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@keyframes splash-sub-blink {
+  0%, 100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
   }
 }
 
@@ -555,6 +677,13 @@ async function submit() {
   box-shadow:
     0 25px 70px -20px rgba(0, 0, 0, 0.8),
     0 0 0 1px rgba(255, 255, 255, 0.05) inset; /* Bordure interne très légèrement accentuée */
+  transition: opacity 0.5s ease, transform 0.5s ease, filter 0.5s ease;
+}
+.login-card.fade-out {
+  opacity: 0;
+  transform: scale(0.92);
+  filter: blur(8px);
+  pointer-events: none;
 }
 .login-title,
 .login-sub,
