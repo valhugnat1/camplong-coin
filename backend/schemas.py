@@ -118,6 +118,65 @@ class SlotsSpinIn(BaseModel):
     client_seed: str = Field(..., min_length=1, max_length=128)
 
 
+# ─── Milk (Bourse du Lait) ─────────────────────────────
+
+class MilkSwapIn(BaseModel):
+    """
+    POST /milk/pools/{symbol}/swap.
+    Pour un buy : amount = CAMP entrants.
+    Pour un sell : amount = milli-bouteilles entrantes (multiple de 1000 conseille).
+    """
+    side: Literal["buy", "sell"]
+    amount: int = Field(..., gt=0)
+    expected_price: Optional[float] = Field(None, gt=0)
+    max_slippage_pct: Optional[float] = Field(None, ge=0, le=100)
+
+
+class AdminMilkCreatePoolIn(BaseModel):
+    symbol: str = Field(..., min_length=1, max_length=32)
+    name: str = Field(..., min_length=1, max_length=64)
+    initial_bottles: int = Field(..., gt=0)
+    price_per_bottle: int = Field(..., gt=0)
+    fee_pct: float = Field(0.5, ge=0, le=10)
+
+
+class AdminMilkUpdatePoolIn(BaseModel):
+    fee_pct: Optional[float] = Field(None, ge=0, le=10)
+    chaos_enabled: Optional[bool] = None
+    status: Optional[Literal["active", "paused"]] = None
+
+
+class AdminMilkInjectIn(BaseModel):
+    """Inject chaos manuelle : kind + delta en bouteilles (signe)."""
+    kind: Literal["famine", "spoil", "overstock", "import"]
+    bottles: int = Field(..., description="positif pour ajouter, negatif pour retirer")
+    narrative: Optional[str] = Field(None, max_length=256)
+
+
+class AdminMilkTemplateIn(BaseModel):
+    """Creation d'un template chaos."""
+    slug: str = Field(..., min_length=1, max_length=64,
+                       pattern=r"^[a-z0-9_]+$")
+    kind: Literal["famine", "spoil", "overstock", "import"]
+    delta_type: Literal["pct", "bottles"]
+    delta_min: float
+    delta_max: float
+    narrative: str = Field(..., min_length=1, max_length=512)
+    weight: int = Field(1, ge=1, le=100)
+    enabled: bool = True
+
+
+class AdminMilkTemplateUpdateIn(BaseModel):
+    """Update partielle d'un template chaos."""
+    kind: Optional[Literal["famine", "spoil", "overstock", "import"]] = None
+    delta_type: Optional[Literal["pct", "bottles"]] = None
+    delta_min: Optional[float] = None
+    delta_max: Optional[float] = None
+    narrative: Optional[str] = Field(None, min_length=1, max_length=512)
+    weight: Optional[int] = Field(None, ge=1, le=100)
+    enabled: Optional[bool] = None
+
+
 # ─── App settings (admin) ──────────────────────────────
 
 class SettingUpdateIn(BaseModel):

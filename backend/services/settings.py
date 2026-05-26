@@ -31,6 +31,13 @@ DEFAULTS = {
     # Slots (edge mecanique ~2.3% via weights+payouts hardcoded)
     "slots_min_bet": "1",
     "slots_max_bet": "100",
+    # Bourse du lait : frequence du bot chaos (lue par main.py::_chaos_loop)
+    "milk_chaos_tick_seconds": "900",   # 15 minutes
+    "milk_chaos_proba_pct": "25",       # 25% par tick par pool actif
+    # Cap de volatilite par event bot (en % de variation de prix MAX).
+    # 0 = bot mute, 100 = pas de cap. 20 = price_after/price_before <= 1.20
+    # (donc delta_milk negatif clamp a -16.67% de reserve).
+    "milk_chaos_max_volatility_pct": "20",
 }
 
 # Cles autorisees pour PATCH /admin/settings. Toute autre cle est refusee

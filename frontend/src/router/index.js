@@ -78,6 +78,13 @@ const routes = [
     meta: { needsUser: true },
   },
   {
+    path: "/milk/:symbol",
+    name: "milk-trade",
+    component: () => import("@/views/lait/MilkTradeView.vue"),
+    meta: { needsUser: true },
+    props: true,
+  },
+  {
     path: "/profile",
     name: "profile",
     component: () => import("@/views/ProfileView.vue"),
@@ -131,6 +138,12 @@ const routes = [
     path: "/admin/casino",
     name: "admin-casino",
     component: () => import("@/views/admin/AdminCasinoView.vue"),
+    meta: { needsAdmin: true },
+  },
+  {
+    path: "/admin/milk",
+    name: "admin-milk",
+    component: () => import("@/views/admin/AdminMilkView.vue"),
     meta: { needsAdmin: true },
   },
 

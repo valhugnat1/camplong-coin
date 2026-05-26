@@ -269,6 +269,120 @@ class CoinflipRound(Base):
     tx_hash_payout = Column(String(66), nullable=True)
 
 
+class MilkPool(Base):
+    """
+    Pool AMM (Uniswap v1) pour un produit laitier.
+    reserve_camp * reserve_milk = k (conserve sauf chaos qui touche reserve_milk).
+    reserve_milk est en milli-bouteilles (1 bouteille = 1000) pour la granularite.
+    system_role pointe sur users.system_role (compte custodial du pool).
+    """
+    __tablename__ = "milk_pools"
+    __table_args__ = {"schema": DB_SCHEMA}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String(32), nullable=False, unique=True)
+    name = Column(String(64), nullable=False)
+    system_role = Column(String(64), nullable=False)
+    reserve_camp = Column(BigInteger, nullable=False)
+    reserve_milk = Column(BigInteger, nullable=False)
+    fee_pct = Column(Float, nullable=False, default=0.5)
+    status = Column(String(16), nullable=False, default="active")  # 'active'|'paused'
+    initial_camp = Column(BigInteger, nullable=False)
+    initial_milk = Column(BigInteger, nullable=False)
+    chaos_enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+class MilkPosition(Base):
+    """Stock de lait detenu par un user sur un pool."""
+    __tablename__ = "milk_positions"
+    __table_args__ = {"schema": DB_SCHEMA}
+
+    username = Column(String(64), primary_key=True)
+    pool_id = Column(Integer, primary_key=True)
+    balance_milk = Column(BigInteger, nullable=False, default=0)
+    avg_cost = Column(Float, nullable=False, default=0)
+    updated_at = Column(DateTime, server_default=func.now(),
+                        onupdate=func.now(), nullable=False)
+
+
+class MilkTrade(Base):
+    """Un swap (buy ou sell) execute sur un pool."""
+    __tablename__ = "milk_trades"
+    __table_args__ = {"schema": DB_SCHEMA}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pool_id = Column(Integer, nullable=False, index=True)
+    username = Column(String(64), nullable=False, index=True)
+    side = Column(String(4), nullable=False)  # 'buy' | 'sell'
+    amount_camp_in = Column(BigInteger, nullable=False, default=0)
+    amount_milk_in = Column(BigInteger, nullable=False, default=0)
+    amount_camp_out = Column(BigInteger, nullable=False, default=0)
+    amount_milk_out = Column(BigInteger, nullable=False, default=0)
+    fee = Column(BigInteger, nullable=False, default=0)
+    price_before = Column(Float, nullable=False)
+    price_after = Column(Float, nullable=False)
+    ts = Column(DateTime, server_default=func.now(), nullable=False, index=True)
+    tx_hash = Column(String(66), nullable=True)
+
+
+class MilkChaosTemplate(Base):
+    """
+    Modele d'evenement chaos editable depuis le backoffice. Le bot dieu
+    tire au sort un template (ponderation `weight`, `enabled=True`) puis
+    genere un delta dans [delta_min, delta_max] et formate la narrative.
+
+    delta_type :
+      - 'pct'     : delta en pourcent de reserve_milk courante (float)
+      - 'bottles' : delta en bouteilles absolues (multiplie x1000 pour milli)
+
+    Convention de signe : si delta_min/max negatifs -> evenement baissier
+    pour la reserve (donc prix qui MONTE). Inversement.
+
+    Placeholders dans `narrative` :
+      {pct}     -> delta_pct signe (ex: '-5.3')
+      {abs_pct} -> abs(delta_pct) (ex: '5.3')
+      {n}       -> delta_bottles signe (ex: '-120')
+      {abs_n}   -> abs(delta_bottles) (ex: '120')
+    """
+    __tablename__ = "milk_chaos_templates"
+    __table_args__ = {"schema": DB_SCHEMA}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    slug = Column(String(64), nullable=False, unique=True)
+    kind = Column(String(32), nullable=False)  # 'famine'|'spoil'|'overstock'|'import'
+    delta_type = Column(String(16), nullable=False)  # 'pct'|'bottles'
+    delta_min = Column(Float, nullable=False)
+    delta_max = Column(Float, nullable=False)
+    narrative = Column(String(512), nullable=False)
+    weight = Column(Integer, nullable=False, default=1)
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(),
+                        onupdate=func.now(), nullable=False)
+
+
+class MilkChaosEvent(Base):
+    """
+    Evenement chaos (bot ou admin) qui modifie reserve_milk d'un pool.
+    Ne touche jamais reserve_camp (preservation de la masse CAMP du systeme).
+    """
+    __tablename__ = "milk_chaos_events"
+    __table_args__ = {"schema": DB_SCHEMA}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pool_id = Column(Integer, nullable=False, index=True)
+    kind = Column(String(32), nullable=False)  # 'famine'|'spoil'|'overstock'|'import'
+    delta_milk = Column(BigInteger, nullable=False)
+    reserve_milk_before = Column(BigInteger, nullable=False)
+    reserve_milk_after = Column(BigInteger, nullable=False)
+    price_before = Column(Float, nullable=False)
+    price_after = Column(Float, nullable=False)
+    narrative = Column(String(256), nullable=True)
+    triggered_by = Column(String(16), nullable=False)  # 'bot'|'admin'
+    ts = Column(DateTime, server_default=func.now(), nullable=False, index=True)
+
+
 class SlotsSpin(Base):
     """
     Un spin de machine a sous (3 rouleaux, single payline, paye sur

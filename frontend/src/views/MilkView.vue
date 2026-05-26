@@ -1,195 +1,246 @@
 <template>
   <AppLayout>
     <main class="page fade-in">
-      <div class="page-header">
-        <h1 class="page-title">Bourse du Lait 🥛</h1>
-        <p class="page-sub">Le lait n'a jamais été aussi liquide. Investis maintenant.</p>
+      <div class="milk-hero">
+        <h2>
+          Le lait est <span class="gold">liquide.</span> Tes CAMP aussi.
+        </h2>
+        <p>
+          Bourse du Lait — un AMM <span class="mono">x·y=k</span> par produit
+          laitier. Achète quand c'est calme, vends quand l'orage gronde.
+          <span class="dim">(le bot dieu peut frapper sans prévenir.)</span>
+        </p>
       </div>
 
-      <div class="milk-hero">
-        <div class="milk-chart-card">
-          <h3>$LAIT-ENTIER · Lait Entier 1L UHT</h3>
-          <div class="milk-chart-price">
-            <span class="big">1.247</span>
-            <span class="unit">CAMP / litre</span>
-            <span class="change mono">+4.21% (24h) ▲</span>
-          </div>
+      <div v-if="milk.error" class="alert error">{{ milk.error }}</div>
 
-          <svg class="milk-chart-svg" viewBox="0 0 600 180" preserveAspectRatio="none">
-            <defs>
-              <linearGradient id="milkGrad" x1="0" x2="0" y1="0" y2="1">
-                <stop offset="0%" stop-color="#14e08e" stop-opacity="0.4" />
-                <stop offset="100%" stop-color="#14e08e" stop-opacity="0" />
-              </linearGradient>
-            </defs>
-            <path :d="chartArea" fill="url(#milkGrad)" />
-            <path :d="chartLine" fill="none" stroke="#14e08e" stroke-width="2" stroke-linejoin="round" />
-            <circle :cx="chartLast.x" :cy="chartLast.y" r="4" fill="#14e08e" />
-            <circle :cx="chartLast.x" :cy="chartLast.y" r="8" fill="#14e08e" opacity="0.3">
-              <animate attributeName="r" values="4;12;4" dur="2s" repeatCount="indefinite" />
-              <animate attributeName="opacity" values="0.5;0;0.5" dur="2s" repeatCount="indefinite" />
-            </circle>
-          </svg>
+      <div v-if="milk.loading && !milk.pools.length" class="loading">
+        Chargement des pools…
+      </div>
 
-          <div class="trade-actions">
-            <button class="btn-primary" disabled>📈 Acheter (bientôt)</button>
-            <button class="btn-ghost" disabled>📉 Vendre (bientôt)</button>
-          </div>
-        </div>
+      <div v-else-if="!milk.pools.length" class="empty">
+        Aucun pool actif pour l'instant. L'admin doit en créer un depuis le
+        backoffice <code>/admin/milk</code>.
+      </div>
 
-        <aside class="milk-side">
-          <h4>Top movers du jour</h4>
-          <div class="milk-row" v-for="(m, i) in movers" :key="i">
+      <div v-else class="milk-grid">
+        <router-link
+          v-for="p in milk.pools"
+          :key="p.id"
+          :to="`/milk/${encodeURIComponent(p.symbol)}`"
+          class="pool-tile"
+          :class="{ paused: p.status === 'paused' }"
+        >
+          <div class="pool-head">
             <div>
-              <div class="name">{{ m.name }}</div>
-              <div class="ticker mono">{{ m.ticker }}</div>
+              <h3>{{ p.name }}</h3>
+              <div class="ticker mono">${{ p.symbol }}</div>
             </div>
-            <div class="delta mono" :class="m.change > 0 ? 'up' : 'down'">
-              {{ m.change > 0 ? '+' : '' }}{{ m.change.toFixed(2) }}%
+            <div class="status-badge" :class="p.status">
+              {{ p.status === 'active' ? 'live' : 'pause' }}
             </div>
           </div>
-        </aside>
+
+          <div class="pool-price">
+            <span class="big mono">{{ p.price.toFixed(2) }}</span>
+            <span class="unit">CAMP / bouteille</span>
+          </div>
+
+          <div class="pool-change" v-if="p.change_24h_pct !== null">
+            <span :class="changeClass(p.change_24h_pct)">
+              {{ p.change_24h_pct > 0 ? '+' : '' }}{{ p.change_24h_pct }}% (24h)
+              {{ p.change_24h_pct > 0 ? '▲' : (p.change_24h_pct < 0 ? '▼' : '·') }}
+            </span>
+          </div>
+          <div class="pool-change dim" v-else>
+            <span class="mono">— pas d'activité 24h</span>
+          </div>
+
+          <div class="pool-foot">
+            <span class="mono dim">{{ formatNum(p.bottles) }} btl en réserve</span>
+            <span class="mono dim">frais {{ p.fee_pct }}%</span>
+          </div>
+        </router-link>
       </div>
 
       <div class="milk-disclaimer">
-        <span class="accent">⚠ Disclaimer :</span> le lait peut tourner. Vos CAMP aussi. Ceci n'est
-        pas un conseil en investissement, mais quand même : <i>achetez du lait d'avoine, frérot.</i>
+        <span class="accent">⚠ Disclaimer :</span> le lait peut tourner. Vos
+        CAMP aussi. Ceci n'est pas un conseil en investissement, mais quand
+        même : <i>achetez du lait d'avoine, frérot.</i>
       </div>
     </main>
   </AppLayout>
 </template>
 
 <script setup>
+import { onMounted } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
+import { useMilkStore } from '@/stores/milk'
+import { formatNum } from '@/config'
 
-const movers = [
-  { name: "Lait d'avoine bio",  ticker: '$LAIT-AVN', change: 12.4 },
-  { name: 'Lait demi-écrémé',   ticker: '$LAIT-DE',  change: 2.1  },
-  { name: 'Lait de coco',       ticker: '$LAIT-COC', change: -3.8 },
-  { name: 'Lait de soja',       ticker: '$LAIT-SOJ', change: -1.4 },
-  { name: "Lait d'amande",      ticker: '$LAIT-AMD', change: 5.7  },
-  { name: 'Lait cru fermier',   ticker: '$LAIT-CRU', change: 22.0 },
-  { name: 'Lait en poudre',     ticker: '$LAIT-PDR', change: -8.2 }
-]
+const milk = useMilkStore()
 
-// Procedural chart (deterministic, no randomness so SSR-safe)
-const W = 600
-const H = 180
-const N = 48
-const pts = []
-for (let i = 0; i < N; i++) {
-  const x = (i / (N - 1)) * W
-  const y =
-    H * 0.6 -
-    Math.sin(i * 0.4) * 20 -
-    Math.sin(i * 0.13) * 30 +
-    Math.sin(i * 0.9) * 6 -
-    (i / N) * 25
-  pts.push({ x, y: Math.max(20, Math.min(H - 10, y)) })
+function changeClass(pct) {
+  if (pct > 0) return 'up'
+  if (pct < 0) return 'down'
+  return 'flat'
 }
-const chartLine = 'M ' + pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' L ')
-const chartArea = chartLine + ` L ${W},${H} L 0,${H} Z`
-const chartLast = pts[pts.length - 1]
+
+onMounted(() => {
+  milk.loadPools()
+})
 </script>
 
 <style scoped>
 .milk-hero {
-  display: grid;
-  grid-template-columns: 2fr 1fr;
-  gap: 1em;
-  margin-bottom: 1.25em;
-}
-@media (max-width: 880px) {
-  .milk-hero { grid-template-columns: 1fr; }
-}
-
-.milk-chart-card {
-  position: relative;
-  background: var(--bg-1);
-  border: 1px solid var(--border);
+  background:
+    radial-gradient(circle at 80% 50%, rgba(20, 224, 142, 0.12), transparent 60%),
+    radial-gradient(circle at 20% 50%, rgba(255, 122, 0, 0.10), transparent 60%),
+    linear-gradient(135deg, #0d1614 0%, #0d0d14 100%);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius);
-  padding: 1.4em;
+  padding: 2em 1.8em;
+  margin-bottom: 1.4em;
+  position: relative;
   overflow: hidden;
 }
-.milk-chart-card h3 {
-  font-size: 1.1em;
+.milk-hero h2 {
+  font-size: 2.2em;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  max-width: 18ch;
   margin-bottom: 0.3em;
 }
-
-.milk-chart-price {
-  display: flex;
-  align-items: baseline;
-  gap: 0.6em;
-  margin-bottom: 1em;
-  flex-wrap: wrap;
+.milk-hero .gold {
+  background: linear-gradient(90deg, var(--gold, #f5c842), #14e08e);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
-.milk-chart-price .big {
-  font-family: 'Bricolage Grotesque', sans-serif;
-  font-size: 2.4em;
-  font-weight: 700;
-  letter-spacing: -0.03em;
+.milk-hero p {
+  color: var(--text-1);
+  max-width: 50ch;
+  margin: 0;
 }
-.milk-chart-price .unit {
+.milk-hero .dim {
   color: var(--text-2);
+  font-style: italic;
 }
-.milk-chart-price .change {
-  color: var(--green);
-  font-weight: 600;
-  font-size: 0.92em;
-}
-
-.milk-chart-svg {
-  width: 100%;
-  height: 180px;
-  display: block;
-}
-
-.trade-actions {
-  display: flex;
-  gap: 0.5em;
-  margin-top: 1em;
-}
-.trade-actions button {
-  flex: 1;
+.milk-hero::after {
+  content: '🥛';
+  position: absolute;
+  right: -10px;
+  bottom: -40px;
+  font-size: 10em;
+  opacity: 0.15;
+  transform: rotate(-12deg);
+  pointer-events: none;
 }
 
-.milk-side {
+.loading,
+.empty {
+  text-align: center;
+  color: var(--text-2);
+  padding: 3em 1em;
+}
+.empty code {
+  background: var(--bg-2);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.milk-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1em;
+}
+
+.pool-tile {
   background: var(--bg-1);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 1.3em;
+  padding: 1.3em 1.2em;
+  text-decoration: none;
+  color: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6em;
+  transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
 }
-.milk-side h4 {
-  font-size: 1em;
-  margin-bottom: 0.8em;
+.pool-tile:hover {
+  transform: translateY(-2px);
+  border-color: var(--green, #14e08e);
+  box-shadow: 0 12px 28px -16px rgba(20, 224, 142, 0.4);
 }
-
-.milk-row {
+.pool-tile.paused {
+  opacity: 0.6;
+}
+.pool-head {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  padding: 0.6em 0;
-  border-bottom: 1px solid var(--border);
-  font-size: 0.92em;
+  align-items: flex-start;
 }
-.milk-row:last-child {
-  border-bottom: none;
+.pool-head h3 {
+  font-size: 1em;
+  margin-bottom: 0.1em;
 }
-.milk-row .name {
-  font-weight: 500;
-}
-.milk-row .ticker {
+.pool-head .ticker {
+  font-size: 0.78em;
   color: var(--text-3);
+  letter-spacing: 0.04em;
+}
+.status-badge {
+  font-size: 0.7em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 0.2em 0.55em;
+  border-radius: 999px;
+}
+.status-badge.active {
+  background: rgba(20, 224, 142, 0.15);
+  color: #14e08e;
+}
+.status-badge.paused {
+  background: var(--bg-3);
+  color: var(--text-3);
+}
+
+.pool-price {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5em;
+}
+.pool-price .big {
+  font-size: 1.7em;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.pool-price .unit {
+  color: var(--text-2);
+  font-size: 0.82em;
+}
+
+.pool-change {
+  font-size: 0.88em;
+  font-weight: 600;
+}
+.pool-change .up { color: #14e08e; }
+.pool-change .down { color: var(--red); }
+.pool-change .flat { color: var(--text-3); }
+
+.pool-foot {
+  margin-top: auto;
+  display: flex;
+  justify-content: space-between;
+  padding-top: 0.8em;
+  border-top: 1px dashed var(--border);
   font-size: 0.78em;
 }
-.delta {
-  font-weight: 600;
-  font-size: 0.85em;
-}
-.delta.up { color: var(--green); }
-.delta.down { color: var(--red); }
 
 .milk-disclaimer {
+  margin-top: 1.4em;
   padding: 0.9em 1em;
   background: var(--bg-2);
   border: 1px dashed var(--border);
@@ -203,5 +254,10 @@ const chartLast = pts[pts.length - 1]
   color: var(--camp);
   font-style: normal;
   font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .milk-hero { padding: 1.5em 1.2em; }
+  .milk-hero h2 { font-size: 1.6em; }
 }
 </style>

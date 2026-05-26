@@ -21,7 +21,7 @@ const tabs = [
   { to: "/exchange", icon: "💸", label: "Échange" },
   { to: "/paris", icon: "🎯", label: "Paris" },
   { to: "/casino", icon: "🎰", label: "Casino" },
-  { to: "/milk", icon: "🥛", label: "Bourse du Lait", badge: "soon" },
+  { to: "/milk", icon: "🥛", label: "Bourse du Lait" },
 ];
 </script>
 

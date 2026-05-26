@@ -41,6 +41,14 @@ export const BETS = {
   maxOptions: 6,
 }
 
+// Bourse du lait. Tolerance de slippage par defaut a l'execution d'un swap.
+// `milkUnit` doit matcher `MILK_UNIT` cote backend (services/milk.py) :
+// 1 bouteille = 1000 milli-bouteilles (granularite des reserves AMM).
+export const MILK = {
+  milkUnit: 1000,
+  defaultSlippagePct: 1,
+}
+
 // ─── Helpers ───────────────────────────────────────────
 
 export function campToEur(camp) {

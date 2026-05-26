@@ -37,6 +37,13 @@
         >
           🪙 Casino
         </router-link>
+        <router-link
+          to="/admin/milk"
+          class="nav-link"
+          :class="{ active: $route.path.startsWith('/admin/milk') }"
+        >
+          🥛 Lait
+        </router-link>
       </nav>
 
       <div class="spacer"></div>
