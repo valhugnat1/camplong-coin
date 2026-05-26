@@ -139,8 +139,34 @@ def get_chart(
         })
     points.sort(key=lambda p: p["ts"])
 
-    # Ajoute le point courant (prix maintenant) pour eviter une ligne plate
+    # Prepend un point synthetique au debut de la fenetre, sinon les fenetres
+    # courtes (15m, 1h) sans aucune activite n'ont qu'un seul point ("current")
+    # et le front ne peut pas tracer de ligne (il faut >= 2 points).
+    # Prix de depart : `price_before` du premier event si on en a un, sinon
+    # le prix actuel (pool tranquille = ligne plate).
     current = amm.current_price(p.reserve_camp, p.reserve_milk)
+    if trades or chaos:
+        first_event_price = None
+        first_ts = points[0]["ts"]
+        for t in trades:
+            if t.ts.isoformat() + "Z" == first_ts and t.price_before:
+                first_event_price = t.price_before
+                break
+        if first_event_price is None:
+            for e in chaos:
+                if e.ts.isoformat() + "Z" == first_ts and e.price_before:
+                    first_event_price = e.price_before
+                    break
+        start_price = first_event_price or current
+    else:
+        start_price = current
+    points.insert(0, {
+        "ts": since.isoformat() + "Z",
+        "price": start_price,
+        "source": "start",
+    })
+
+    # Ajoute le point courant (prix maintenant) pour eviter une ligne plate
     points.append({
         "ts": _dt.datetime.utcnow().isoformat() + "Z",
         "price": current,

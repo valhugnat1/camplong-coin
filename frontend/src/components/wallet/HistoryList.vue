@@ -52,26 +52,40 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 
 const props = defineProps({
   history: { type: Array, required: true },
   meUsername: { type: String, required: true }
 })
 
-const PAGE_SIZE = 8
+// Page size depend du viewport : 5 sur mobile pour limiter le scroll, 8 sinon.
+const isMobile = ref(false)
+let mql = null
+function syncIsMobile(e) { isMobile.value = e.matches }
+onMounted(() => {
+  if (typeof window === 'undefined') return
+  mql = window.matchMedia('(max-width: 640px)')
+  isMobile.value = mql.matches
+  mql.addEventListener('change', syncIsMobile)
+})
+onUnmounted(() => {
+  if (mql) mql.removeEventListener('change', syncIsMobile)
+})
+
+const pageSize = computed(() => (isMobile.value ? 5 : 8))
 const page = ref(1)
 
 const totalPages = computed(() =>
-  Math.max(1, Math.ceil((props.history?.length || 0) / PAGE_SIZE))
+  Math.max(1, Math.ceil((props.history?.length || 0) / pageSize.value))
 )
 const paginated = computed(() => {
-  const start = (page.value - 1) * PAGE_SIZE
-  return props.history.slice(start, start + PAGE_SIZE)
+  const start = (page.value - 1) * pageSize.value
+  return props.history.slice(start, start + pageSize.value)
 })
 
 watch(
-  () => props.history.length,
+  [() => props.history.length, pageSize],
   () => {
     if (page.value > totalPages.value) page.value = totalPages.value
   }

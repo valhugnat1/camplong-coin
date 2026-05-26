@@ -35,7 +35,27 @@
           </div>
 
           <button class="btn-primary btn-block btn-qr" @click="showQr = true" :disabled="!wallet.me.username">
-            <span class="ic">🔳</span> Afficher mon QR
+            <span class="ic qr-ic" aria-hidden="true">
+  <svg viewBox="0 0 24 24" fill="currentColor">
+    <path fill-rule="evenodd" d="M3 3h7v7H3V3zm1.5 1.5v4h4v-4h-4z"/>
+    <rect x="5" y="5" width="3" height="3"/>
+    <path fill-rule="evenodd" d="M14 3h7v7h-7V3zm1.5 1.5v4h4v-4h-4z"/>
+    <rect x="16" y="5" width="3" height="3"/>
+    <path fill-rule="evenodd" d="M3 14h7v7H3v-7zm1.5 1.5v4h4v-4h-4z"/>
+    <rect x="5" y="16" width="3" height="3"/>
+    <rect x="12" y="3" width="2" height="2"/>
+    <rect x="12" y="7" width="2" height="2"/>
+    <rect x="14" y="11" width="2" height="2"/>
+    <rect x="18" y="11" width="2" height="2"/>
+    <rect x="12" y="13" width="2" height="2"/>
+    <rect x="16" y="13" width="2" height="2"/>
+    <rect x="14" y="15" width="2" height="2"/>
+    <rect x="18" y="15" width="2" height="2"/>
+    <rect x="12" y="17" width="2" height="2"/>
+    <rect x="14" y="19" width="2" height="2"/>
+    <rect x="18" y="19" width="2" height="2"/>
+  </svg>
+</span> Afficher mon QR
           </button>
         </section>
 
@@ -321,6 +341,15 @@ onMounted(() => {
 .btn-qr .ic,
 .btn-scan .ic {
   font-size: 1.2em;
+}
+.btn-qr .qr-ic {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: -0.15em;
+}
+.btn-qr .qr-ic svg {
+  width: 1.1em;
+  height: 1.1em;
 }
 
 /* ─── Envoyer ─── */

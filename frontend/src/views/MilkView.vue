@@ -257,7 +257,26 @@ onMounted(() => {
 }
 
 @media (max-width: 640px) {
-  .milk-hero { padding: 1.5em 1.2em; }
-  .milk-hero h2 { font-size: 1.6em; }
+  .milk-hero {
+    padding: 1.3em 1.1em;
+    margin-bottom: 1em;
+  }
+  .milk-hero h2 { font-size: 1.5em; }
+  .milk-hero p { font-size: 0.9em; }
+  .milk-hero::after { font-size: 7em; bottom: -25px; }
+
+  .milk-grid { gap: 0.7em; }
+  .pool-tile { padding: 1em 1em; gap: 0.5em; }
+  .pool-head h3 { font-size: 0.95em; }
+  .pool-price .big { font-size: 1.45em; }
+  .pool-price .unit { font-size: 0.75em; }
+  .pool-change { font-size: 0.82em; }
+  .pool-foot { font-size: 0.72em; padding-top: 0.6em; }
+
+  .milk-disclaimer {
+    margin-top: 1em;
+    padding: 0.7em 0.8em;
+    font-size: 0.78em;
+  }
 }
 </style>

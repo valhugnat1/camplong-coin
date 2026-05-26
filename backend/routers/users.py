@@ -105,6 +105,22 @@ def list_users(user: User = Depends(current_user), db: Session = Depends(get_db)
     return [{"username": u.username} for u in others]
 
 
+@router.get("/leaderboard")
+def leaderboard(_: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Classement des users par solde CAMP (desc). Inclut tous les users humains."""
+    users = (
+        db.query(User)
+          .filter(User.account_type == "user")
+          .all()
+    )
+    ranked = [
+        {"username": u.username, "balance": get_balance_camp(u.address)}
+        for u in users
+    ]
+    ranked.sort(key=lambda x: x["balance"], reverse=True)
+    return [{"rank": i + 1, **r} for i, r in enumerate(ranked)]
+
+
 # ─── Transferts entre users ────────────────────────────
 
 @router.post("/transfer")
@@ -139,6 +155,64 @@ def transfer(
         "tx_hash": tx_hash,
         "new_balance": get_balance_camp(user.address),
     }
+
+
+@router.get("/balance-history")
+def balance_history(
+    window: str = "1d",
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Reconstruit l'evolution du solde CAMP sur une fenetre temporelle.
+
+    Strategie : on lit le solde actuel on-chain, puis on rejoue les transactions
+    qui touchent l'user a l'envers. Le solde a t = solde_actuel - somme des deltas
+    survenus apres t.
+    """
+    windows = {
+        "15m": datetime.timedelta(minutes=15),
+        "1h":  datetime.timedelta(hours=1),
+        "6h":  datetime.timedelta(hours=6),
+        "1d":  datetime.timedelta(days=1),
+        "7d":  datetime.timedelta(days=7),
+    }
+    if window not in windows:
+        raise HTTPException(400, "window doit etre 15m, 1h, 6h, 1d ou 7d")
+
+    now = datetime.datetime.utcnow()
+    duration = windows[window]
+    start = now - duration
+    current = get_balance_camp(user.address)
+
+    txs = (
+        db.query(Transaction)
+          .filter(or_(
+              Transaction.from_username == user.username,
+              Transaction.to_username == user.username,
+          ))
+          .filter(Transaction.ts >= start)
+          .order_by(Transaction.ts.asc())
+          .all()
+    )
+    # delta signe : +amount si recu, -amount si envoye
+    deltas = [
+        (t.ts, t.amount if t.to_username == user.username else -t.amount)
+        for t in txs
+    ]
+
+    n = 60
+    points = []
+    for i in range(n + 1):
+        ti = start + (duration * i / n)
+        # solde a ti = solde_actuel - somme des deltas posterieurs a ti
+        delta_after = sum(d for (ts, d) in deltas if ts > ti)
+        points.append({
+            "ts": ti.isoformat() + "Z",
+            "balance": current - delta_after,
+        })
+
+    return {"current": current, "points": points}
 
 
 @router.get("/history")

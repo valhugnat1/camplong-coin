@@ -21,6 +21,10 @@
           </ol>
         </div>
 
+        <div class="full-width">
+          <BalanceChart :live-balance="wallet.me.balance ?? null" />
+        </div>
+
         <div class="full-width cta-row">
           <router-link to="/exchange" class="cta-send" role="button">
             <div class="cta-ic">💸</div>
@@ -44,6 +48,7 @@
 import { onMounted, computed } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import BalanceCard from '@/components/wallet/BalanceCard.vue'
+import BalanceChart from '@/components/wallet/BalanceChart.vue'
 import HistoryList from '@/components/wallet/HistoryList.vue'
 import { useWalletStore } from '@/stores/wallet'
 
@@ -77,6 +82,7 @@ onMounted(() => {
 
 @media (max-width: 880px) {
   .wallet-grid { grid-template-columns: 1fr; }
+  .hype-card { display: none; }
 }
 
 .cta-row {

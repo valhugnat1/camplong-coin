@@ -78,54 +78,24 @@
                     stroke-width="2"
                     stroke-linejoin="round"
                   />
-                  <!-- Markers : uniquement MES trades (buy/sell). -->
-                  <!-- Hit area transparent + cercle visuel, pour faciliter le survol. -->
-                  <g
-                    v-for="(m, i) in myMarkers"
-                    :key="`m${i}`"
-                    class="marker-group"
-                    @mouseenter="hoveredMarker = m"
-                    @mouseleave="hoveredMarker = null"
-                  >
-                    <circle
-                      :cx="m.x"
-                      :cy="m.y"
-                      r="14"
-                      fill="transparent"
-                      class="marker-hit"
-                    />
-                    <circle
-                      :cx="m.x"
-                      :cy="m.y"
-                      r="6"
-                      :fill="m.side === 'buy' ? '#14e08e' : '#ff7a00'"
-                      stroke="#0d0d14"
-                      stroke-width="2"
-                      pointer-events="none"
-                    />
-                  </g>
-                  <circle
-                    v-if="lastPoint"
-                    :cx="lastPoint.x"
-                    :cy="lastPoint.y"
-                    r="3"
-                    fill="#14e08e"
-                    opacity="0.6"
-                    pointer-events="none"
-                  />
-                  <circle
-                    v-if="lastPoint"
-                    :cx="lastPoint.x"
-                    :cy="lastPoint.y"
-                    r="7"
-                    fill="#14e08e"
-                    opacity="0.25"
-                    pointer-events="none"
-                  >
-                    <animate attributeName="r" values="4;12;4" dur="2s" repeatCount="indefinite" />
-                    <animate attributeName="opacity" values="0.4;0;0.4" dur="2s" repeatCount="indefinite" />
-                  </circle>
                 </svg>
+                <!-- Markers en HTML positionne en %, sinon les <circle> SVG se
+                     deforment a cause du preserveAspectRatio="none". -->
+                <div
+                  v-for="(m, i) in myMarkers"
+                  :key="`m${i}`"
+                  class="marker-dot"
+                  :class="m.side"
+                  :style="markerStyle(m)"
+                  @mouseenter="hoveredMarker = m"
+                  @mouseleave="hoveredMarker = null"
+                  @click="hoveredMarker = hoveredMarker === m ? null : m"
+                ></div>
+                <div
+                  v-if="lastPoint"
+                  class="last-dot"
+                  :style="markerStyle(lastPoint)"
+                ></div>
                 <!-- HTML tooltip (positionne sur le marker hover) -->
                 <div
                   v-if="hoveredMarker"
@@ -606,6 +576,7 @@ async function doSwap() {
 const ranges = [
   { m: 15,           label: '15 min' },
   { m: 60,           label: '1h' },
+  { m: 60 * 6,       label: '6h' },
   { m: 60 * 24,      label: '24h' },
   { m: 60 * 24 * 7,  label: '7j' },
 ]
@@ -637,8 +608,15 @@ const scaledPoints = computed(() => {
   const range = priceRange.value
   if (!pts.length || !range) return []
   const { W, H, padTop, padBottom } = chartDims
-  return pts.map((p, i) => {
-    const x = pts.length === 1 ? W : (i / (pts.length - 1)) * W
+  // X par TIMESTAMP (pas par index) : sinon un trade a -7min apparait au meme
+  // endroit sur la fenetre 15m et 1h, vu que c'est le 2e des 3 points dans
+  // les deux cas. On scale lineairement entre le 1er et le dernier point.
+  const tFirst = new Date(pts[0].ts).getTime()
+  const tLast = new Date(pts[pts.length - 1].ts).getTime()
+  const tSpan = tLast - tFirst || 1
+  return pts.map((p) => {
+    const t = new Date(p.ts).getTime()
+    const x = ((t - tFirst) / tSpan) * W
     const yNorm = (p.price - range.min) / range.span
     const y = padTop + (1 - yNorm) * (H - padTop - padBottom)
     return { ...p, x, y }
@@ -674,30 +652,51 @@ const myMarkers = computed(() => {
 const hoveredMarker = ref(null)
 const tooltipStyle = computed(() => {
   if (!hoveredMarker.value) return {}
-  const { W, H } = chartDims
-  // % par rapport au container .chart-canvas (= taille du SVG)
-  const leftPct = (hoveredMarker.value.x / W) * 100
-  const topPct = (hoveredMarker.value.y / H) * 100
-  return {
-    left: `${leftPct}%`,
-    top: `${topPct}%`,
-  }
+  return markerStyle(hoveredMarker.value)
 })
 
-// Tick labels en bas du chart : 3 reperes temporels (debut, milieu, fin)
+// % position d'un point dans .chart-canvas. Utilise pour les markers HTML
+// (sinon les <circle> SVG sont deformes par preserveAspectRatio="none").
+function markerStyle(p) {
+  const { W, H } = chartDims
+  return {
+    left: `${(p.x / W) * 100}%`,
+    top: `${(p.y / H) * 100}%`,
+  }
+}
+
+// Tick labels en bas du chart : 3 reperes temporels (debut, milieu, fin).
+// On affiche en RELATIF (-15min, -30min, maintenant...) plutot qu'en absolu :
+// sinon les fenetres 15m et 1h sans activite paraissent identiques alors que
+// l'echelle de temps differe. Le milieu est calcule sur le temps (pas sur
+// l'index du tableau), pour matcher la position X scalee par timestamp.
 const timeAxisLabels = computed(() => {
   const pts = scaledPoints.value
   if (pts.length < 2) return []
-  const first = pts[0]
-  const last = pts[pts.length - 1]
-  const mid = pts[Math.floor(pts.length / 2)]
-  const fmt = (iso) => formatShort(iso)
+  const tFirst = new Date(pts[0].ts).getTime()
+  const tLast = new Date(pts[pts.length - 1].ts).getTime()
+  const midIso = new Date((tFirst + tLast) / 2).toISOString()
   return [
-    { label: fmt(first.ts), left: '0%' },
-    { label: fmt(mid.ts), left: '50%' },
-    { label: fmt(last.ts), left: '100%' },
+    { label: formatRelative(pts[0].ts), left: '0%' },
+    { label: formatRelative(midIso), left: '50%' },
+    { label: formatRelative(pts[pts.length - 1].ts), left: '100%' },
   ]
 })
+
+function formatRelative(iso) {
+  if (!iso) return ''
+  const diffMin = Math.round((Date.now() - new Date(iso).getTime()) / 60000)
+  if (diffMin < 1) return 'maintenant'
+  if (diffMin < 60) return `−${diffMin}min`
+  const diffH = diffMin / 60
+  if (diffH < 24) {
+    const v = diffH >= 10 ? Math.round(diffH) : Math.round(diffH * 10) / 10
+    return `−${String(v).replace('.', ',')}h`
+  }
+  const diffD = diffH / 24
+  const v = diffD >= 10 ? Math.round(diffD) : Math.round(diffD * 10) / 10
+  return `−${String(v).replace('.', ',')}j`
+}
 
 // Axe Y : 3 ticks de prix (max, mid, min) - en CSS absolu sur l'overlay.
 const yAxisLabels = computed(() => {
@@ -948,10 +947,63 @@ watch(symbol, async (newSym, old) => {
   display: block;
 }
 
-/* Markers : hit area transparent r=14 pour avoir une zone de hover
-   genereuse meme si visuellement le point fait 6px. */
-.marker-group { cursor: pointer; }
-.marker-hit { cursor: pointer; }
+/* Markers HTML : positionnes en % sur .chart-canvas. Plus deformes par
+   le preserveAspectRatio="none" du SVG. Hit area genereuse via padding
+   transparent (background-clip), visuellement le dot fait 12px. */
+.marker-dot {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid #0d0d14;
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  z-index: 2;
+  /* Hit area effective de 28px via box-shadow inset transparent : non, mieux
+     d'utiliser une pseudo. Simple : un padding via outline n'agrandit pas la
+     hit area. On agrandit le dot lui-meme via ::before transparent. */
+}
+.marker-dot::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: transparent;
+}
+.marker-dot.buy { background: #14e08e; }
+.marker-dot.sell { background: #ff7a00; }
+
+.last-dot {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #14e08e;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 1;
+}
+.last-dot::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #14e08e;
+  opacity: 0.25;
+  transform: translate(-50%, -50%);
+  animation: last-pulse 2s infinite;
+}
+@keyframes last-pulse {
+  0%   { transform: translate(-50%, -50%) scale(0.5); opacity: 0.4; }
+  100% { transform: translate(-50%, -50%) scale(2.0); opacity: 0;   }
+}
 
 /* Tooltip flottante, positionnee sur .chart-canvas par left/top en % */
 .chart-tooltip {
@@ -1252,7 +1304,106 @@ watch(symbol, async (newSym, old) => {
 .small { font-size: 0.8em; }
 
 @media (max-width: 640px) {
+  /* Layout & header */
+  .milk-trade-page { padding-bottom: 2em; }
+  .trade-header { margin-bottom: 0.9em; }
+  .back-link { font-size: 0.82em; margin-bottom: 0.5em; }
   .price-block { text-align: left; }
-  .title-row { flex-direction: column; }
+  .title-row { flex-direction: column; gap: 0.5em; }
+  .page-title {
+    font-size: 1.35em;
+    flex-wrap: wrap;
+    gap: 0.3em;
+  }
+  .page-title .ticker { font-size: 0.65em; }
+  .meta {
+    gap: 0.5em;
+    margin-top: 0.25em;
+    flex-wrap: wrap;
+    font-size: 0.78em;
+  }
+  .price-big { font-size: 1.7em; }
+  .price-unit { font-size: 0.72em; }
+  .price-block .change { font-size: 0.82em; margin-top: 0.25em; }
+
+  /* Cards */
+  .card { padding: 0.9em; }
+  .layout-grid { gap: 0.8em; margin-bottom: 0.8em; }
+
+  /* Chart */
+  .chart-card { gap: 0.6em; }
+  .chart-toolbar h3 { font-size: 0.95em; }
+  .range-pills {
+    width: 100%;
+    justify-content: space-between;
+    gap: 0.2em;
+  }
+  .range-pill {
+    flex: 1;
+    padding: 0.35em 0.4em;
+    font-size: 0.72em;
+    text-align: center;
+  }
+  .y-axis {
+    width: 36px;
+    height: 170px;
+  }
+  .y-tick { font-size: 0.62em; }
+  .chart-canvas,
+  .chart-svg { height: 170px; }
+  .time-axis { margin-left: 42px; }
+  .time-tick { font-size: 0.62em; }
+  .chart-legend { font-size: 0.72em; }
+  .chart-tooltip {
+    font-size: 0.72em;
+    min-width: 130px;
+    padding: 0.45em 0.6em;
+  }
+
+  /* Swap card */
+  .swap-card { gap: 0.7em; }
+  .tab-mini { padding: 0.5em 0.4em; font-size: 0.85em; }
+  .field { font-size: 0.82em; }
+  /* iOS : input font-size >= 16px sinon Safari zoom automatiquement au focus */
+  .field input[type='number'] { font-size: 16px; padding: 0.55em 0.65em; }
+  .quote-row { font-size: 0.8em; }
+  .quote-box { padding: 0.6em 0.75em; }
+  .adv-explain { font-size: 0.76em; }
+  .position h4 { font-size: 0.82em; }
+  .pos-row { font-size: 0.82em; }
+
+  /* Tape : on stack le montant sur une 2eme ligne pour eviter l'overflow.
+     Sinon "100 CAMP -> 5.00 btl" deborde de la 1fr column. */
+  .trade-list li {
+    grid-template-columns: 20px 1fr auto;
+    grid-template-areas:
+      "side user  price"
+      "side amount amount";
+    gap: 0.1em 0.5em;
+    padding: 0.5em 0.1em;
+    font-size: 0.8em;
+  }
+  .trade-list .t-side { grid-area: side; }
+  .trade-list .t-user {
+    grid-area: user;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .trade-list .t-price { grid-area: price; }
+  .trade-list .t-amount {
+    grid-area: amount;
+    font-size: 0.92em;
+    color: var(--text-1);
+  }
+
+  /* Chaos */
+  .chaos-list li { padding: 0.5em 0.1em; }
+  .chaos-list .chaos-kind { font-size: 0.74em; }
+  .chaos-list .chaos-narrative { font-size: 0.82em; }
+  .list-card h3 { font-size: 0.95em; }
+  .trade-list,
+  .chaos-list { max-height: 280px; }
 }
 </style>
