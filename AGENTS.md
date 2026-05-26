@@ -13,9 +13,10 @@ Document destiné aux développeurs (humains ou agents IA) qui veulent contribue
 5. [Frontend](#frontend)
 6. [Module Paris (P2P bets)](#module-paris-p2p-bets)
 7. [Module Casino (coinflip + roulette + slots)](#module-casino-coinflip--roulette--slots)
-8. [Sécurité & secrets](#securite--secrets)
-9. [Déploiement](#deploiement)
-10. [Conventions & gotchas](#conventions--gotchas)
+8. [Module Bourse du Lait (AMM)](#module-bourse-du-lait-amm)
+9. [Sécurité & secrets](#securite--secrets)
+10. [Déploiement](#deploiement)
+11. [Conventions & gotchas](#conventions--gotchas)
 
 ---
 
@@ -101,11 +102,16 @@ camplong (DB)
 │                      ├── rng_seeds           (commit-reveal provably fair)
 │                      ├── coinflip_rounds     (cf. § Module Casino)
 │                      ├── roulette_spins      (cf. § Module Casino)
-│                      └── slots_spins         (cf. § Module Casino)
+│                      ├── slots_spins         (cf. § Module Casino)
+│                      ├── milk_pools             (cf. § Module Bourse du Lait)
+│                      ├── milk_positions         (cf. § Module Bourse du Lait)
+│                      ├── milk_trades            (cf. § Module Bourse du Lait)
+│                      ├── milk_chaos_events      (cf. § Module Bourse du Lait)
+│                      └── milk_chaos_templates   (cf. § Module Bourse du Lait)
 └── schema: prod       (mêmes tables)
 ```
 
-Les tables `poker_*`, `milk_*` existent (préparées par `migrate_v4_extensions.py`) mais ne sont pas encore exploitées (cf. `EXTENSIONS.md`).
+Les tables `poker_*` existent (préparées par `migrate_v4_extensions.py`) mais ne sont pas encore exploitées (cf. `EXTENSIONS.md`).
 
 Garanties :
 - Le code applique `SET search_path TO "<schema>", public` à chaque nouvelle connexion (ceinture)
@@ -223,6 +229,7 @@ Voir § *Module Casino* pour le détail des flows.
 - `migrate_v6_app_settings.py` : table `app_settings` + seed des paramètres casino par défaut (`coinflip_edge_pct=2`, `coinflip_min_bet=1`, `coinflip_max_bet=200`, `roulette_min_bet=1`, `roulette_max_bet=200`).
 - `migrate_v7_slots.py` : table `slots_spins` + seed `slots_min_bet=1`, `slots_max_bet=100`.
 - `migrate_v8_bets_v2.py` : **refonte complète des paris**. DROP de l'ancienne table `bets` (les paris non résolus doivent être refundés manuellement AVANT, le script les liste). Recrée `bets` avec son nouveau schéma + crée `bet_options`, `bet_participations`, `bet_votes`. Voir § *Module Paris*.
+- `migrate_v9_milk_chaos_templates.py` : table `milk_chaos_templates` + seed de ~33 templates (famine_mild, overstock_massive, gerard_depardieu, etc.) + seed des `app_settings` pour le bot chaos (`milk_chaos_tick_seconds=900`, `milk_chaos_proba_pct=25`, `milk_chaos_max_volatility_pct=20`).
 
 Chaque script s'applique aux deux schémas par défaut (`test`, puis `prod`) et est ré-exécutable sans effet de bord (CREATE IF NOT EXISTS, ON CONFLICT DO NOTHING, etc.). Lancer ensuite `seed_system_accounts.py` après v4 pour créer les wallets de `casino_bank`, `bets_escrow`, `poker_bank`, `milk_pool_lait_entier`.
 
@@ -240,32 +247,42 @@ backend/
 ├── database.py          # engine SQLAlchemy + session + search_path
 ├── models.py            # User, Transaction, Nonce, MarketOrder, Bet,
 │                        # AppSetting, RngSeed,
-│                        # CoinflipRound, RouletteSpin, SlotsSpin
+│                        # CoinflipRound, RouletteSpin, SlotsSpin,
+│                        # MilkPool, MilkPosition, MilkTrade,
+│                        # MilkChaosEvent, MilkChaosTemplate
 ├── schemas.py           # tous les Pydantic In/Out
 ├── security.py          # JWT decode, deps current_user / require_admin, Fernet
 ├── blockchain.py        # web3 init, helpers admin_transfer / balanceOf / nonce
 ├── email_service.py     # SMTP best-effort (orders + bets notifs)
 ├── services/
-│   ├── escrow.py        # lock/release vers comptes système (paris, casino, …)
+│   ├── escrow.py        # lock/release vers comptes système (paris, casino, lait, …)
 │   ├── settings.py      # lecture/écriture des app_settings, defaults de secours
 │   ├── randomness.py    # commit-reveal (sha256) + derive_int
 │   ├── coinflip.py      # play() : lock → tirage → release si gain
 │   ├── roulette.py      # spin() : N mises agrégées → 1 lock + 1 payout net
-│   └── slots.py         # spin() : 3 picks pondérés indépendants → release si 3-of-kind
+│   ├── slots.py         # spin() : 3 picks pondérés indépendants → release si 3-of-kind
+│   ├── amm.py           # x·y=k : current_price, buy_quote, sell_quote
+│   └── milk.py          # quote, swap (lock/release), pick_template,
+│                        # apply_chaos, clamp_to_volatility,
+│                        # chaos_analysis, position_dict, ...
 ├── routers/
 │   ├── users.py         # /login, /me, /transfer, /history, /orders, /me/*
 │   ├── admin.py         # /admin/login, /admin/users, /admin/credit|debit,
 │   │                    # /admin/orders, /admin/bets/*,
-│   │                    # /admin/settings/*, /admin/casino/stats
+│   │                    # /admin/settings/*, /admin/casino/stats,
+│   │                    # /admin/milk/* (pools, templates, chaos analysis)
 │   ├── bets.py          # /bets/*, /me/bets, vote/match/cancel/resolve
-│   └── casino.py        # /casino/{coinflip,roulette,slots}/*,
-│                        # /me/{coinflip,roulette,slots}
+│   ├── casino.py        # /casino/{coinflip,roulette,slots}/*,
+│   │                    # /me/{coinflip,roulette,slots}
+│   └── milk.py          # /milk/pools/*, /me/milk/*
 └── scripts/
     ├── migrate_v4_extensions.py   # tables paris/casino/lait + comptes système
     ├── migrate_v5_bet_votes.py    # colonnes creator_vote / opponent_vote
     ├── migrate_v6_app_settings.py # table app_settings + seed casino defaults
     ├── migrate_v7_slots.py        # table slots_spins + seed slots min/max bet
-    └── seed_system_accounts.py    # crée bets_escrow, casino_bank, poker_bank
+    ├── migrate_v8_bets_v2.py      # refonte des paris (drop + recrée + tables sous-jacentes)
+    ├── migrate_v9_milk_chaos_templates.py  # table milk_chaos_templates + seeds
+    └── seed_system_accounts.py    # crée bets_escrow, casino_bank, poker_bank, milk_pool_*
 ```
 
 ### Modules clés
@@ -363,7 +380,8 @@ frontend/src/
 ├── api/
 │   ├── client.js                # wrapper fetch avec auto-injection Bearer + handle 401 global
 │   ├── bets.js                  # REST wrappers paris (user + admin)
-│   └── casino.js                # REST wrappers coinflip + roulette + adminSettings
+│   ├── casino.js                # REST wrappers coinflip + roulette + adminSettings
+│   └── milk.js                  # REST wrappers AMM lait (user + admin pools/templates/analysis)
 │
 ├── router/
 │   └── index.js                 # routes + guard (needsUser / needsAdmin / guest)
@@ -373,7 +391,8 @@ frontend/src/
 │   ├── wallet.js                # me, users, history (refresh centralisé)
 │   ├── orders.js                # orders admin (partagé entre AdminView et AdminOrdersView pour le compteur pending)
 │   ├── bets.js                  # state + actions paris (open/mine/detail + create/match/cancel/resolve/vote)
-│   └── casino.js                # config + history + actions coinflip + roulette (lock/play/spin)
+│   ├── casino.js                # config + history + actions coinflip + roulette + slots (lock/play/spin)
+│   └── milk.js                  # pools, pool courant, chart, trades, chaos, positions, myTrades
 │
 ├── assets/styles/
 │   └── main.css                 # variables CSS, primitives (boutons, inputs, alerts), grain noise en background
@@ -401,8 +420,8 @@ frontend/src/
     ├── LoginView.vue            # avec coin 3D low-poly animé en background
     ├── WalletView.vue           # solde + plan en 6 étapes + CTA "Envoyer des CAMP" → /exchange + historique paginé
     ├── ExchangeView.vue         # Recevoir (handle + QR) | Envoyer (scan QR ou pote + montant + note)
-    ├── CasinoView.vue           # hub casino : tuiles cliquables (coinflip + roulette jouables)
-    ├── MilkView.vue             # placeholder Bourse du Lait (chart SVG)
+    ├── CasinoView.vue           # hub casino : tuiles cliquables (coinflip + roulette + slots)
+    ├── MilkView.vue             # hub Bourse du Lait : grid pools + sparkline + prix
     ├── ProfileView.vue          # email + mot de passe
     ├── SelfCustodyView.vue      # export clé + ajout MetaMask via wallet_addEthereumChain / watchAsset
     ├── BuyCampView.vue          # création de demandes achat/vente
@@ -415,12 +434,15 @@ frontend/src/
     │   ├── CoinflipView.vue     # pile/face + pièce 3D CSS + provably fair
     │   ├── RouletteView.vue     # tapis HTML/CSS + roue qui décélère sur le bon n°
     │   └── SlotsView.vue        # 3 rouleaux (Web Animations API), 3 lignes visibles
+    ├── lait/
+    │   └── MilkTradeView.vue    # chart SVG + swap card + position réalisable + tape trades/chaos
     └── admin/
         ├── AdminLoginView.vue
         ├── AdminView.vue            # treasury + users + bandeau "demandes en attente"
         ├── AdminOrdersView.vue      # filtres + modal "Confirmer et transférer" → tx on-chain auto
         ├── AdminBetsView.vue        # liste + filtres + force-resolve/cancel
-        └── AdminCasinoView.vue      # éditeur des app_settings (edge, limites) + PnL + RTP
+        ├── AdminCasinoView.vue      # éditeur des app_settings (edge, limites) + PnL + RTP
+        └── AdminMilkView.vue        # pools + bot chaos freq + analyse banque + templates + historique chaos
 ```
 
 ### `config.js` — point central des paramètres
@@ -716,6 +738,158 @@ Widget Prev/Next 40×40 px (tap-friendly), affiché uniquement si `totalPages > 
 ### Concurrence
 
 Pas de `SELECT FOR UPDATE` nécessaire — chaque round/spin est indépendant et créé en une seule transaction. Les éventuels conflits de nonce treasury entre deux plays parallèles sont déjà gérés par `blockchain.py::_next_treasury_nonce()` (verrou pessimiste sur la ligne nonce).
+
+---
+
+## Module Bourse du Lait (AMM)
+
+AMM type Uniswap v1 (x · y = k), un pool par "produit" laitier (`LAIT-ENTIER`, et autres à créer côté admin). Les CAMP transitent on-chain via `escrow.lock/release` sur un compte système `milk_pool_<symbol>`. Le lait lui-même n'est PAS un token ERC-20 séparé : c'est un nombre off-chain dans `milk_positions.balance_milk`, indexé en milli-bouteilles (`MILK_UNIT = 1000`, soit 1 btl = 1000 unités internes).
+
+Un **bot dieu (chaos)** tourne en boucle async dans `main.py::_chaos_loop` et modifie aléatoirement `reserve_milk` (jamais `reserve_camp`) selon un catalogue de templates pondérés. Le prix `reserve_camp / reserve_milk` bouge sans qu'aucun CAMP ne quitte le système. Templates et fréquence sont éditables à chaud depuis le backoffice.
+
+### Tables
+
+**`milk_pools`** — un pool = un produit. Le `system_role` pointe sur le wallet `users.system_role` qui détient les CAMP du pool.
+
+| Colonne          | Type        | Notes                                                       |
+|------------------|-------------|-------------------------------------------------------------|
+| `id` (PK)        | INT auto    |                                                             |
+| `symbol` (UNQ)   | VARCHAR(32) | ex: `LAIT-ENTIER`                                           |
+| `name`           | VARCHAR(64) | libellé pour l'UI                                           |
+| `reserve_camp`   | BIGINT      | CAMP entiers détenus par le pool                            |
+| `reserve_milk`   | BIGINT      | milli-bouteilles (1 btl = 1000)                             |
+| `fee_pct`        | FLOAT       | frais swap (défaut 0, en %, prélevé sur l'input)            |
+| `status`         | VARCHAR     | `active` / `paused`                                         |
+| `chaos_enabled`  | BOOLEAN     | un pool peut être exempté du bot                            |
+| `system_role`    | VARCHAR(64) | `milk_pool_<slug>` — lié à `users.system_role`              |
+| `initial_camp`   | BIGINT      | snapshot d'amorçage (pour calculer la dérive)               |
+| `initial_milk`   | BIGINT      | idem                                                         |
+
+**`milk_positions`** — stock de lait par user et par pool. `avg_cost` est le prix moyen pondéré d'achat (CAMP/btl) — utilisé pour la base de coût UI. Vendre **ne modifie pas** `avg_cost` ; seul un buy l'actualise.
+
+**`milk_trades`** — tape de tous les swaps (`buy` ou `sell`). Garde `price_before`, `price_after`, `fee`, `tx_hash` pour audit.
+
+**`milk_chaos_events`** — historique de chaque event chaos appliqué. `kind ∈ {famine, overstock, spoil, import}`, `delta_milk` signé (négatif = retrait), `narrative` est le texte affiché à l'UI (templated avec placeholders `{pct}/{abs_pct}/{n}/{abs_n}`), `triggered_by ∈ {bot, admin}`.
+
+**`milk_chaos_templates`** — catalogue de scénarios tirables par le bot. Chaque template :
+- `slug`, `kind`, `weight` (poids dans le tirage), `enabled`.
+- `delta_type ∈ {pct, bottles}` : si `pct`, `delta_min/max` sont en % du `reserve_milk` ; si `bottles`, en bouteilles absolues.
+- `narrative` avec placeholders. Ex: `🇨🇳 Boom export vers la Chine (-{abs_pct}% du stock local)`.
+
+### Math AMM (`services/amm.py`)
+
+```
+buy_quote(reserve_camp, reserve_milk, fee_pct, camp_in):
+    fee = camp_in * fee_pct / 100
+    camp_in_net = camp_in - fee
+    new_reserve_camp = reserve_camp + camp_in_net
+    new_reserve_milk = (reserve_camp * reserve_milk) // new_reserve_camp   # k préservé via floor div
+    milk_out = reserve_milk - new_reserve_milk
+
+sell_quote(reserve_camp, reserve_milk, fee_pct, milk_in):
+    new_reserve_milk = reserve_milk + milk_in
+    new_reserve_camp = (reserve_camp * reserve_milk) // new_reserve_milk
+    camp_out_gross = reserve_camp - new_reserve_camp
+    fee = camp_out_gross * fee_pct / 100
+    camp_out = camp_out_gross - fee
+```
+
+`k` peut dériver très légèrement vers le haut à cause du floor div + des fees qui restent dans le pool. C'est attendu. Le prix marginal est `reserve_camp / reserve_milk * MILK_UNIT` (CAMP par bouteille).
+
+### Endpoints
+
+| Méthode | Route                                       | Auth   | Description                                              |
+|---------|---------------------------------------------|--------|----------------------------------------------------------|
+| GET     | `/milk/pools`                               | user   | Liste pools actifs + prix courant                        |
+| GET     | `/milk/pools/{symbol}`                      | user   | Détail d'un pool                                          |
+| GET     | `/milk/pools/{symbol}/chart?minutes=`       | user   | Série temporelle (1..43200 min) à partir des trades + chaos |
+| GET     | `/milk/pools/{symbol}/quote?side=&amount=`  | user   | Preview du swap (renvoie out, fee, price impact)          |
+| POST    | `/milk/pools/{symbol}/swap`                 | user   | Exécute le swap (`SELECT FOR UPDATE` sur la row pool)     |
+| GET     | `/milk/pools/{symbol}/trades`               | user   | Tape récente d'un pool                                    |
+| GET     | `/milk/pools/{symbol}/chaos`                | user   | Historique chaos d'un pool                                |
+| GET     | `/me/milk/positions`                        | user   | Mes positions (toutes pools)                              |
+| GET     | `/me/milk/trades`                           | user   | Mes trades                                                 |
+| GET     | `/admin/milk/pools`                         | admin  | Pools + balance CAMP on-chain du wallet pool              |
+| POST    | `/admin/milk/pools`                         | admin  | Créer un pool (crée aussi le compte système associé)      |
+| PATCH   | `/admin/milk/pools/{id}`                    | admin  | Update `fee_pct`, `chaos_enabled`, `status`               |
+| POST    | `/admin/milk/pools/{id}/inject`             | admin  | Chaos manuel (`kind`, `delta_milk`, `narrative`)          |
+| GET     | `/admin/milk/chaos`                         | admin  | Historique chaos (filtrable par pool, max 100)            |
+| GET     | `/admin/milk/trades`                        | admin  | Tous les trades (filtrable par pool)                      |
+| GET     | `/admin/milk/templates`                     | admin  | Liste des templates                                       |
+| POST    | `/admin/milk/templates`                     | admin  | Créer un template                                          |
+| PATCH   | `/admin/milk/templates/{id}`                | admin  | Update (slug, kind, delta_min/max, narrative, weight, enabled) |
+| DELETE  | `/admin/milk/templates/{id}`                | admin  | Suppression                                                |
+| POST    | `/admin/milk/templates/{id}/preview`        | admin  | Simulate un tirage + delta + narrative rendu              |
+| GET     | `/admin/milk/chaos/analysis?reference_bottles=` | admin | Espérance de drift banque + bias stock + projection/jour, **cap de volatilité appliqué** (cf. infra) |
+
+### Pattern swap
+
+`POST /milk/pools/{symbol}/swap` (cf. `services/milk.py::swap`) :
+
+1. `SELECT ... FOR UPDATE` sur la row pool (sérialise les swaps concurrents — sans ça, deux users qui swappent en même temps verraient la même réserve et créeraient des incohérences classiques type front-running / TOCTOU sur AMM).
+2. `quote(pool, side, amount)` puis vérification `_check_slippage(q, expected_price, max_slippage_pct)`.
+3. **Buy** : `escrow.lock(user → milk_pool_<slug>, amount)` → si OK, applique la quote (`reserve_camp`, `reserve_milk`, `MilkPosition.balance_milk +=`, `avg_cost` recalculé pondéré), persiste un `MilkTrade`.
+4. **Sell** : on retire `amount` du `MilkPosition.balance_milk` **avant** la release (pour qu'un rollback côté tx remette tout d'aplomb), puis `escrow.release(milk_pool_<slug> → user, amount_out)`. Persiste un `MilkTrade`.
+
+`avg_cost` est mis à jour **seulement aux buys** (moyenne pondérée). Les sells n'y touchent pas — le coût moyen des bouteilles restantes ne change pas quand on en vend.
+
+### Position dict : valeur réalisable vs mark-to-market
+
+`services/milk.py::position_dict` expose pour chaque position :
+- `current_value_camp` : valeur mark-to-market (`balance_milk × prix_spot`). Théorique — surestime systématiquement parce qu'elle ne prend pas en compte le price impact qu'une vente totale provoquerait.
+- `realisable_value_camp` : ce qu'on touche **vraiment** si on solde tout maintenant (= `amm.sell_quote(reserves, fee_pct, balance_milk).amount_out`). Honnête.
+- `cost_basis_camp`, `pnl_camp` (mark-to-market), `realisable_pnl_camp` (réaliste), `price_impact_sell_all_pct`.
+
+La vue `MilkTradeView.vue` utilise par défaut `realisable_value_camp` et `realisable_pnl_camp`, avec un `<details>` pour expliquer la différence si l'impact est notable.
+
+### Bot chaos (`main.py::_chaos_loop`)
+
+Boucle async lancée au démarrage de l'app. Chaque tick :
+1. Relit `milk_chaos_tick_seconds` (60..86400, défaut 900s) et `milk_chaos_proba_pct` (0..100, défaut 25) dans `app_settings`.
+2. Pour chaque pool `active` et `chaos_enabled` : tire à `proba_pct%` si un event tombe.
+3. Si oui, `milk.pick_template()` (tirage pondéré sur `MilkChaosTemplate.enabled`), puis `apply_chaos()` :
+   - `_delta_from_template()` calcule un delta brut (uniform sur `[delta_min, delta_max]`, interprété en `%` ou en btl selon `delta_type`).
+   - `clamp_to_volatility(delta_milk, reserve_milk, max_vol_pct)` plafonne le delta à `±max_vol_pct%` de variation de **prix** (cap asymétrique côté lait : `-max/(100+max)` pour les famines, `+max/(100-max)` pour les overstocks — un cap de 20% sur prix = -16.67% / +25% sur lait). Le param `milk_chaos_max_volatility_pct` (défaut 20) vit dans `app_settings`.
+   - Persiste un `MilkChaosEvent` (avec `triggered_by='bot'`) et update `pool.reserve_milk`.
+
+Le bot ne touche **jamais** `reserve_camp` : la conservation des CAMP du système reste vraie. Seul le prix bouge.
+
+### Analyse d'espérance banque (`chaos_analysis`)
+
+`GET /admin/milk/chaos/analysis` calcule pour le catalogue actif :
+- `weighted_avg_delta_milk_pct` (bias stock — positif = milk a tendance à grossir, donc prix à baisser),
+- `weighted_avg_abs_delta_pct` (volatilité moyenne),
+- `weighted_avg_bank_drift_pct` (espérance de drift de la banque, formule fermée sur `E[sqrt(milk_after/milk_before) − 1]`).
+
+Le cap de volatilité (`max_vol_pct` lu depuis `app_settings`) **est appliqué** : chaque template est clampé sur `[cap_lo, cap_hi]` avant intégration, avec masse concentrée sur chaque borne pour la part qui dépasserait. Sans ça, les templates à gros range (ex: `milking_record [+100, +400 btl]` sur ref 200 btl = +50%..+200%) gonflaient artificiellement le drift attendu.
+
+**Hypothèse importante** affichée dans l'UI : ce drift suppose que les holders rééquilibrent au prix d'avant choc (vendre après famine, racheter après overstock). Sans volume de trade, la banque garde exactement son CAMP — c'est un upper bound conditionnel, pas une rente.
+
+### Front (`views/MilkView.vue` + `views/lait/MilkTradeView.vue`)
+
+- **`MilkView.vue`** (hub) : grid des pools avec prix courant + sparkline + variation. Remplace l'ancien placeholder.
+- **`MilkTradeView.vue`** : un pool sélectionné.
+  - Chart SVG `viewBox="0 0 600 200"`, série de prix dérivée des trades + chaos events. Y-axis avec labels prix, X-axis avec ticks temps. Ranges sélectionnables `15min / 1h / 24h / 7j` (le bouton 30j a été retiré, pas utile à l'échelle de jeu).
+  - **Mes markers buy/sell** uniquement (on filtre par `wallet.me.username`), tooltip HTML overlay (et pas `<title>` SVG, qui ne déclenche pas l'hover sur tous les navigateurs).
+  - Card swap : buy/sell tabs, input avec Max button (sell), preview live debouncé (220ms), `<details>` "Avancé" qui contient le slippage tolérance (caché par défaut pour ne pas perdre les débutants).
+  - Position : Stock, Valeur réalisable (avec badge `impact -X%` si notable), Performance, P&L. Un `<details>` "Pourquoi pas la valeur au prix affiché ?" explique le price impact.
+  - Listes : trades récents + chaos récents avec narrative.
+
+#### Pattern "Sell-all par bouteille pleine"
+
+Subtilité : `formatBottles(balance_milk)` doit utiliser `Math.floor`, pas `toFixed(2)`. Sinon une balance à 999 milli s'affiche "1.00 btl" mais la vente de 1 btl (1000 milli) est refusée. Le bouton Max et l'input de quantité côté sell sont aussi clampés sur `balance_milk` exact (et la conversion bouteilles → milli utilise `Math.round` pour absorber la dust flottante).
+
+### Admin (`views/admin/AdminMilkView.vue`)
+
+- **Pools** : grid avec balance CAMP on-chain du wallet pool, contrôles `pause/resume`, `chaos enabled`, modal "Injecter chaos" (kind + delta + narrative custom).
+- **Card "🤖 Bot chaos · fréquence"** : 3 tuiles `tick_seconds`, `proba_pct`, `max_volatility_pct` éditables (validation backend), + cadence estimée (`events/h` calculée depuis les settings et le nombre de pools actifs).
+- **Card "💰 Espérance banque · catalogue chaos"** : 3 tuiles drift moyen / bias stock / projection jour, expliquées et avec un encart ⚠️ rappelant l'hypothèse "si rééquilibrage". Table collapsible par template (slug, kind, weight share, Δ moyen lait, E[banque]).
+- **Templates** : tableau éditable (slug, kind, delta range, narrative avec placeholders, weight, enabled). Modal preview pour tester un template sans l'appliquer.
+- **Historique chaos** : tape paginée (10/page, fetch limit 100), toutes pools confondues.
+
+### Concurrence
+
+`SELECT ... FOR UPDATE` sur la row `milk_pools` est obligatoire à chaque swap (sinon front-running entre deux swaps quasi-simultanés). Le bot chaos tourne en arrière-plan et n'utilise pas `FOR UPDATE` — il accepte qu'un swap user puisse passer "entre" la lecture et l'écriture de `reserve_milk`, parce qu'il commit son delta sur la valeur observée. L'invariant à préserver est juste : `reserve_milk` ne descend jamais sous `MIN_RESERVE_MILK = 1000` (1 btl), pour éviter une division par zéro / prix infini.
 
 ---
 

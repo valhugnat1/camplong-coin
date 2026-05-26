@@ -18,13 +18,19 @@ L'app gère les wallets en backend (clés privées chiffrées), un backoffice ad
 - **Acheter / vendre des CAMP** contre des EUR (Wero / Revolut), envoie une demande à l'admin qui traite manuellement → confirmation par email
 - **Self-custody mode** : récupération de la clé privée + import dans MetaMask en deux clics
 - **Profil** : email, changement de mot de passe
-- **Onglets "soon"** placeholders pour les évolutions à venir : Paris (style Polymarket), Casino (slots/roulette/poker), Bourse du Lait (trading de produits laitiers titrisés)
+- **Paris communautaires** (style Polymarket) : crée un pari avec 2 à 6 options et une mise fixe ; résolution par arbitre, vote communautaire (2 voix concordantes), ou admin override
+- **Casino** : Pile ou Face (edge configurable), Roulette européenne (37 cases, mises pleines / couleurs / dozens / colonnes), Slots 3-rouleaux (RTP ~90%), tirages provably fair (commit-reveal sha256)
+- **Bourse du Lait** : AMM type Uniswap (x·y=k), pools multi-produits, bot chaos avec événements scriptés (famine, overstock, spoil, import), cap de volatilité, narrative éditable depuis le backoffice
+- **Onglet "soon"** restant : Poker (à venir, cf. `EXTENSIONS.md`)
 
 ### Pour l'admin
 
 - **Backoffice** avec vue d'ensemble : treasury, total en circulation, valeur EUR de tout
 - **Gestion des users** : création, crédit/débit, suppression (refusée si solde non nul)
 - **Gestion des demandes d'achat/vente** : filtrer par statut (pending/done/cancelled), confirmer une demande **déclenche automatiquement le mouvement on-chain** (treasury → user pour achat, user → treasury pour vente) + email au user
+- **Backoffice Paris** : liste avec filtres, force-resolve, force-cancel
+- **Backoffice Casino** : éditeur des `app_settings` (edge coinflip, min/max bet par jeu), stats PnL + RTP observé en temps réel
+- **Backoffice Bourse du Lait** : pools (création, pause, injection chaos manuelle), fréquence et cap de volatilité du bot chaos, espérance de drift banque, catalogue de templates éditables, historique des events chaos
 
 ### Email notifications
 

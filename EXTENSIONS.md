@@ -1,338 +1,67 @@
-# EXTENSIONS.md — Modules Poker, Bourse du Lait
+# EXTENSIONS.md — Module Poker (à venir)
 
-Spec technique des modules **Poker** et **Bourse du Lait** (AMM x·y=k) — pas encore implémentés. Ce document complète `AGENTS.md` et ne le remplace pas.
+Spec technique du seul module **non encore implémenté** : le **Poker**. Ce document complète `AGENTS.md` et ne le remplace pas.
 
 > Modules **déjà livrés** (spec déplacée dans `AGENTS.md`) :
-> - **Paris** (P2P bets)
+> - **Paris** (P2P bets — refonte mai 2026)
 > - **Casino — Pile ou Face** (coinflip, edge configurable à chaud)
 > - **Casino — Roulette** (européenne, 37 cases)
+> - **Casino — Slots** (3 rouleaux, single payline, RTP ~90%)
+> - **Bourse du Lait** (AMM x·y=k, bot chaos, templates éditables, cap volatilité)
 >
-> La table `app_settings` qui permet à l'admin de régler les paramètres
-> (edge coinflip, limites de mise) sans redéploiement est documentée
-> dans `AGENTS.md` également.
+> Les patterns transverses (comptes système, escrow, RNG vérifiable,
+> `app_settings`) sont également documentés dans `AGENTS.md`.
 
-> Lecture conseillée : `AGENTS.md` d'abord (architecture custodial, contrat, blockchain.py, schémas test/prod, modules Paris et Casino livrés).
+> Lecture conseillée : `AGENTS.md` d'abord (architecture custodial, contrat, blockchain.py, schémas test/prod, tous les modules livrés).
 
 ---
 
 ## Table des matières
 
-1. [Vue d'ensemble & refactoring global](#1-vue-densemble--refactoring-global)
+1. [Vue d'ensemble & points encore valables](#1-vue-densemble--points-encore-valables)
 2. [Module Casino — Poker](#5-module-casino--poker)
-3. [Module Bourse du Lait](#6-module-bourse-du-lait)
-4. [Points d'attention](#7-points-dattention)
-5. [Améliorations & autres jeux possibles](#8-améliorations--autres-jeux-possibles)
+3. [Points d'attention](#7-points-dattention)
+4. [Améliorations & autres jeux possibles](#8-améliorations--autres-jeux-possibles)
 
-> Les ancres des sections gardent leur numérotation d'origine (5 → 8) ;
-> seule la TOC a été renumérotée après le départ des modules Paris et Casino.
+> Les ancres des sections gardent leur numérotation d'origine (5, 7, 8) ;
+> seule la TOC a été renumérotée. La section 6 (Bourse du Lait) a été
+> supprimée puisque le module est livré.
 
 ---
 
-## 1. Vue d'ensemble & refactoring global
+## 1. Vue d'ensemble & points encore valables
 
 ### 1.1 Principes directeurs
 
-Le projet passe d'un seul concept simple (transfer P2P + market orders manuels) à une plateforme de jeu avec 5+ produits. Trois principes à acter avant de coder.
+Le projet est passé d'un seul concept simple (transfer P2P + market orders manuels) à une plateforme de jeu avec 5 produits livrés. Pour le poker, qui reste à faire, ces principes s'appliquent toujours.
 
-**On-chain vs off-chain.** Le projet actuel fait un `adminTransfer` on-chain pour chaque mouvement de CAMP. C'est OK pour les transferts P2P (volume faible, latence ~2s acceptable). C'est intenable pour le poker (multiples mises par main) et limite pour le trading rapide (bourse du lait). On adopte le pattern **escrow on-chain + livre off-chain** : les fonds bougent on-chain au début et à la fin d'une "session de jeu", mais les actions de jeu intermédiaires se font dans la DB.
+**On-chain vs off-chain.** L'`adminTransfer` on-chain pour chaque mouvement est OK pour les transferts P2P (volume faible, latence ~2s). C'est intenable pour le poker (multiples mises par main). On adopte le pattern **escrow on-chain + livre off-chain** : les fonds bougent on-chain au sit-in et au sit-out, les actions de jeu intermédiaires (check/raise/fold) restent en DB.
 
 | Module | Pattern | Tx on-chain par cycle | Statut |
 |---|---|---|---|
 | Paris | Escrow on-chain immédiat | 3 (mise creator + mise matcher + settlement) | ✅ livré |
 | Pile ou Face | On-chain par flip | 2 (mise + payout) — 1 seule si perte (pas de release) | ✅ livré |
 | Roulette | On-chain par spin | 2 (mises agrégées + payout net) — 1 seule si perte | ✅ livré |
+| Slots | On-chain par spin | 2 (mise + payout) — 1 seule si perte | ✅ livré |
+| Bourse du Lait | On-chain par swap | 2 (lock CAMP + release lait→CAMP) | ✅ livré |
 | Poker | Sit-in / sit-out only | 2 par session (deposit + withdraw), peu importe le nombre de mains | à faire |
-| Bourse du Lait | On-chain par swap | 2 (mise + payout) ou 1 si on aggrège | à faire |
 
-**Comptes système.** Tu as déjà la treasury. On ajoute des comptes "système" pour isoler les fonds par produit, ce que tu as demandé pour la banque casino. Tracking comptable bien plus propre, et limite le rayon d'explosion en cas de bug.
+**Comptes système, escrow, RNG vérifiable.** Tous ces patterns sont en place et documentés dans `AGENTS.md` :
+- `users.account_type='system'` + `system_role` (treasury, casino_bank, bets_escrow, milk_pool_*) — déjà créés par `seed_system_accounts.py`.
+- `services/escrow.py::lock/release` — réutilisable tel quel pour le `poker_bank` (sit-in/sit-out).
+- `services/randomness.py` (commit-reveal sha256 + `derive_int`) — réutilisable pour le shuffle du deck poker.
 
-**RNG vérifiable.** Pour tout ce qui est tirage aléatoire (coinflip, roulette, deck de poker, événements bot lait), on utilise un schéma **commit-reveal**. Le backend annonce `hash(seed)` avant le tirage, exécute le tirage, puis publie `seed`. Les users peuvent vérifier qu'on n'a pas triché a posteriori. C'est ce que font Stake, Bustabit, etc. Très peu coûteux à implémenter et ça désamorce immédiatement les accusations de triche entre potes.
+Côté refactoring de structure (split en sous-modules `routers/casino/poker.py` etc.) et migrations Alembic, ce n'est toujours pas fait — on est resté sur la convention plate + `migrate_v*.py` qui a tenu jusqu'à 15+ tables. C'est probablement le bon moment pour basculer si on attaque le poker, mais ce n'est pas un bloqueur.
 
-### 1.2 Concept clé : comptes système
+### 1.2 Audit comptable (non implémenté)
 
-Aujourd'hui un compte = un user (login, mdp, clé privée chiffrée, email). On introduit un second type : compte système.
-
-```
-users (avec nouvelle colonne account_type)
-├── 'user'        : Hugo, Alice, Emile, ...   (login + clé chiffrée)
-└── 'system'      :                              (pas de login, clé chiffrée, géré par admin)
-     ├── treasury           (déjà existant — flag rétroactif)
-     ├── casino_bank        (banque jeux maison : coinflip, roulette)
-     ├── bets_escrow        (escrow paris)
-     ├── poker_bank         (stacks des joueurs en cours de partie)
-     └── milk_pool_<symbol> (un par produit lait : LAIT-ENTIER, BEURRE, ...)
-```
-
-Caractéristiques d'un compte système :
-- Adresse Ethereum + clé privée chiffrée (comme un user normal, pour pouvoir faire des `adminTransfer` dans les deux sens)
-- Pas de `password_hash`, pas d'email
-- Filtré dans la liste users côté annuaire user (`/users` ne les renvoie pas)
-- Visible et créable dans le backoffice (`/admin/system-accounts`)
-- Impossible de leur envoyer un CAMP depuis l'UI user de façon arbitraire — uniquement via les flows métier (mise sur un pari, swap dans un pool, sit-in poker)
-
-Migration : ajouter `account_type VARCHAR(16) NOT NULL DEFAULT 'user'` à `users`, et back-fill la treasury à `'system'` + `system_role = 'treasury'`.
-
-```sql
-ALTER TABLE users ADD COLUMN account_type VARCHAR(16) NOT NULL DEFAULT 'user';
-ALTER TABLE users ADD COLUMN system_role VARCHAR(32) NULL;
--- Index pour filtrer rapidement
-CREATE INDEX idx_users_account_type ON users(account_type);
-```
-
-À noter : tu peux choisir de **ne pas** stocker la treasury dans `users` (elle vient déjà de `.env`), pour ne pas avoir à dupliquer la source de vérité. Choix par défaut dans ce doc : la treasury reste en `.env`, et les autres comptes système sont en DB.
-
-### 1.3 Service d'escrow réutilisable
-
-Un module commun pour bloquer/libérer des fonds vers un compte système. Évite de dupliquer la logique entre paris, casino, lait.
-
-```python
-# backend/services/escrow.py
-from sqlalchemy.orm import Session
-from models import User, Transaction
-from blockchain import admin_transfer, get_balance_camp
-import datetime
-
-class EscrowError(Exception): pass
-
-def get_system_account(db: Session, role: str) -> User:
-    acc = db.query(User).filter(
-        User.account_type == "system", User.system_role == role
-    ).first()
-    if not acc:
-        raise EscrowError(f"Compte système '{role}' introuvable, à créer dans le backoffice")
-    return acc
-
-def lock(db: Session, user: User, role: str, amount: int, note: str) -> str:
-    """Bloque des fonds : user -> compte système. Retourne tx_hash."""
-    if amount <= 0:
-        raise EscrowError("Montant doit être strictement positif")
-    bal = get_balance_camp(user.address)
-    if amount > bal:
-        raise EscrowError(f"Solde insuffisant ({bal} CAMP)")
-    sys_acc = get_system_account(db, role)
-    tx_hash = admin_transfer(db, user.address, sys_acc.address, amount)
-    db.add(Transaction(
-        ts=datetime.datetime.utcnow(),
-        from_username=user.username,
-        to_username=f"__{role}__",
-        amount=amount, note=note, tx_hash=tx_hash,
-    ))
-    return tx_hash
-
-def release(db: Session, role: str, user: User, amount: int, note: str) -> str:
-    """Libère des fonds : compte système -> user. Retourne tx_hash."""
-    if amount <= 0:
-        raise EscrowError("Montant doit être strictement positif")
-    sys_acc = get_system_account(db, role)
-    bal = get_balance_camp(sys_acc.address)
-    if amount > bal:
-        raise EscrowError(
-            f"Compte '{role}' insuffisant ({bal} CAMP), il en faut {amount}. "
-            f"Recharge depuis la treasury."
-        )
-    tx_hash = admin_transfer(db, sys_acc.address, user.address, amount)
-    db.add(Transaction(
-        ts=datetime.datetime.utcnow(),
-        from_username=f"__{role}__",
-        to_username=user.username,
-        amount=amount, note=note, tx_hash=tx_hash,
-    ))
-    return tx_hash
-```
-
-Toutes les opérations de jeu passent par `lock()` et `release()`. La table `transactions` continue d'être le journal unique de tous les mouvements CAMP — l'audit reste trivial.
-
-### 1.4 Service de randomness vérifiable
-
-```python
-# backend/services/randomness.py
-import secrets, hashlib
-from models import RngSeed  # nouvelle table, voir §1.7
-
-def commit(db, purpose: str, ref_id: int | None = None) -> tuple[str, int]:
-    """Génère un seed secret, retourne son hash public + l'id DB du seed."""
-    seed = secrets.token_hex(32)
-    seed_hash = hashlib.sha256(seed.encode()).hexdigest()
-    row = RngSeed(
-        purpose=purpose, ref_id=ref_id,
-        seed_hash=seed_hash, seed_secret=seed,
-        revealed=False,
-    )
-    db.add(row); db.flush()
-    return seed_hash, row.id
-
-def reveal(db, seed_id: int, client_seed: str = "") -> tuple[str, str]:
-    """Marque le seed comme révélé, retourne (server_seed, combined_hash)."""
-    row = db.get(RngSeed, seed_id)
-    if row is None: raise ValueError("seed inconnu")
-    row.revealed = True
-    combined = hashlib.sha256((row.seed_secret + ":" + client_seed).encode()).hexdigest()
-    return row.seed_secret, combined
-
-def derive_int(combined_hash: str, modulus: int, offset: int = 0) -> int:
-    """Tire un int dans [0, modulus) à partir du hash combiné."""
-    h = hashlib.sha256(f"{combined_hash}:{offset}".encode()).hexdigest()
-    return int(h, 16) % modulus
-```
-
-L'utilisateur peut, après chaque tirage, recalculer le résultat et le vérifier. La page de chaque jeu affiche `hash` avant pari et `seed` après pari, avec un lien "vérifier le résultat" qui détaille la formule.
-
-### 1.5 Refactoring de la structure de fichiers
-
-`users.py` et `admin.py` vont exploser si on continue à tout y mettre. On split par domaine.
-
-```
-backend/
-├── main.py
-├── config.py
-├── database.py
-├── blockchain.py
-├── security.py
-├── email_service.py
-├── models/
-│   ├── __init__.py            # re-exports pour compat (import models)
-│   ├── core.py                # User (avec account_type), Transaction, Nonce
-│   ├── market.py              # MarketOrder
-│   ├── bets.py                # Bet
-│   ├── casino.py              # CoinflipRound, RouletteSpin
-│   ├── poker.py               # PokerTable, PokerSession, PokerHand
-│   ├── milk.py                # MilkPool, MilkTrade, MilkChaosEvent
-│   └── rng.py                 # RngSeed
-├── schemas/                   # idem, un .py par domaine
-├── routers/
-│   ├── auth.py                # /login, /me, /me/password, ...
-│   ├── wallet.py              # /transfer, /history, /users
-│   ├── market.py              # /orders, /me/orders   (déplacé de users.py)
-│   ├── bets.py                # /bets/*
-│   ├── coinflip.py            # /casino/coinflip/*
-│   ├── roulette.py            # /casino/roulette/*
-│   ├── poker.py               # /casino/poker/* + WebSocket
-│   ├── milk.py                # /milk/*
-│   ├── admin_users.py         # /admin/users, /admin/system-accounts
-│   ├── admin_market.py        # /admin/orders/*
-│   ├── admin_bets.py          # /admin/bets/*
-│   ├── admin_casino.py        # /admin/casino/*
-│   └── admin_milk.py          # /admin/milk/pools/*
-└── services/
-    ├── escrow.py
-    ├── randomness.py
-    ├── amm.py                 # math x·y=k
-    ├── poker_engine.py        # wrapper autour de treys
-    └── chaos_bot.py           # scheduler pour la bourse du lait
-```
-
-Côté frontend, même découpage :
-
-```
-frontend/src/
-├── views/
-│   ├── WalletView.vue
-│   ├── ProfileView.vue
-│   ├── paris/
-│   │   ├── ParisListView.vue
-│   │   ├── ParisCreateView.vue
-│   │   └── ParisDetailView.vue
-│   ├── casino/
-│   │   ├── CasinoHomeView.vue     # hub
-│   │   ├── CoinflipView.vue
-│   │   ├── RouletteView.vue
-│   │   └── PokerView.vue
-│   ├── lait/
-│   │   ├── MilkHomeView.vue
-│   │   └── MilkTradeView.vue
-│   └── admin/
-│       ├── ...
-│       ├── AdminBetsView.vue
-│       ├── AdminCasinoView.vue
-│       ├── AdminMilkView.vue
-│       └── AdminSystemAccountsView.vue
-├── api/
-│   ├── client.js
-│   ├── bets.js
-│   ├── casino.js
-│   ├── poker.js   (utilise WebSocket aussi)
-│   └── milk.js
-└── stores/
-    ├── auth.js  wallet.js   (existants)
-    ├── bets.js
-    ├── casino.js
-    └── milk.js
-```
-
-### 1.6 Configuration partagée
-
-Les paramètres métier des nouveaux modules vont dans `config.js` (front) et `config.py` (back). Un seul endroit, partagé symboliquement entre les deux (les valeurs sont dupliquées mais documentées comme devant rester en sync).
-
-```js
-// frontend/config.js — ajouts
-export const BETS = {
-  minStake: 1,
-  maxStake: 1000,
-  arbiterDefaultFeePct: 5,
-  maxOpenBetsPerUser: 10,
-}
-
-// NB : pour les modules casino DÉJÀ LIVRÉS (coinflip, roulette), les
-// paramètres (edge_pct, min_bet, max_bet) sont stockés dans la table
-// DB `app_settings` et modifiables à chaud depuis le backoffice
-// (`/admin/casino`). Pas de duplication front/back nécessaire — voir
-// AGENTS.md, section « Module Casino ». Ne reste ici que la config
-// pour les modules à venir (poker).
-export const CASINO = {
-  poker: { minBuyIn: 50, maxBuyIn: 1000 },
-}
-
-export const MILK = {
-  feePct: 0.5,
-  maxSlippagePctDefault: 1,
-}
-```
-
-### 1.7 Nouvelles tables transverses
-
-```sql
--- RNG vérifiable (utilisé par coinflip, roulette, poker, chaos bot)
-CREATE TABLE rng_seeds (
-  id           SERIAL PRIMARY KEY,
-  purpose      VARCHAR(32) NOT NULL,   -- 'coinflip' | 'roulette' | 'poker' | 'chaos'
-  ref_id       INT NULL,               -- id de la round / spin / hand / event
-  seed_hash    VARCHAR(64) NOT NULL,   -- sha256 du secret, publié avant
-  seed_secret  VARCHAR(64) NOT NULL,   -- secret, publié après
-  revealed     BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at   TIMESTAMP DEFAULT NOW()
-);
-CREATE INDEX idx_rng_purpose_ref ON rng_seeds(purpose, ref_id);
-```
-
-### 1.8 Migrations
-
-Le pattern actuel (`scripts/init_db.py` + migrate_v*.py) tient sur un projet à 4 tables. Avec 15+ tables on a vraiment besoin d'**Alembic**. Ajout :
-
-```bash
-cd backend
-pip install alembic
-alembic init alembic
-# configurer alembic/env.py pour utiliser DATABASE_URL et DB_SCHEMA
-alembic revision --autogenerate -m "add account_type + extension tables"
-alembic upgrade head
-```
-
-Migration v4 typique :
-- Ajouter `account_type` + `system_role` à `users`
-- Créer toutes les nouvelles tables (paris, casino, poker, milk, rng_seeds)
-- Seed des comptes système initiaux (casino_bank, bets_escrow, etc.) via script `scripts/seed_system_accounts.py`
-
-À faire dans les deux schémas (`test` et `prod`) — Alembic permet de paramétrer le schema via la config.
-
-### 1.9 Audit comptable
-
-Avec 5+ produits qui bougent du CAMP, la question "où sont passés mes 1 000 000 CAMP" devient non triviale. Ajouter un endpoint admin `/admin/audit` qui calcule :
+Avec 5 modules qui bougent du CAMP, la question "où sont passés mes 1 000 000 CAMP" devient non triviale. Endpoint admin `/admin/audit` souhaitable :
 
 ```
 treasury balance + system_account balances + sum(user balances) == total_supply ?
 ```
 
-Si ça ne matche pas, il y a un bug quelque part. Ce check tourne aussi via un cron 1×/jour et alerte par email à l'admin si écart > 0.01 CAMP.
+Si ça ne matche pas, il y a un bug. Cron 1×/jour + alerte email à l'admin si écart > 0.01 CAMP. Pas encore en place — à ajouter quand le poker arrive (multiplie les chemins).
 
 ---
 
@@ -577,319 +306,6 @@ Le seed RNG permet de reproduire le shuffle du deck (Fisher-Yates seedé). Quand
 
 ---
 
-## 6. Module Bourse du Lait
-
-### 6.1 Concept (récap)
-
-AMM type Uniswap v1 : pool (`reserve_camp`, `reserve_milk`) avec `reserve_camp × reserve_milk = k` (constante). Prix marginal = `reserve_camp / reserve_milk`. Frais sur swap = 0.5% (ajustable), restant dans le pool donc augmente lentement `k`. Plusieurs pools possibles, un par "produit" laitier (LAIT-ENTIER, BEURRE, EMMENTAL...).
-
-Pour amorcer : admin crée un pool avec une réserve initiale (X CAMP + Y unités de lait, prix initial = X/Y). Les "unités de lait" sont des bouteilles virtuelles trackées en DB — pas un token ERC-20 séparé (gain en simplicité).
-
-**Bot dieu (chaos)** : process périodique qui modifie aléatoirement la réserve de lait du pool (jamais la réserve CAMP) → crée des chocs de prix sans casser la conservation des CAMP du système.
-
-### 6.2 Schéma DB
-
-```sql
-CREATE TABLE milk_pools (
-  id              SERIAL PRIMARY KEY,
-  symbol          VARCHAR(32) NOT NULL UNIQUE,    -- 'LAIT-ENTIER'
-  name            VARCHAR(64) NOT NULL,
-  reserve_camp    BIGINT NOT NULL,                -- en CAMP entiers
-  reserve_milk    BIGINT NOT NULL,                -- en milliunités (pour éviter floats : 1 bouteille = 1000)
-  fee_pct         FLOAT NOT NULL DEFAULT 0.5,
-  status          VARCHAR(16) NOT NULL DEFAULT 'active',  -- 'active' | 'paused'
-  initial_camp    BIGINT NOT NULL,
-  initial_milk    BIGINT NOT NULL,
-  chaos_enabled   BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at      TIMESTAMP DEFAULT NOW(),
-  system_role     VARCHAR(64) NOT NULL    -- ex 'milk_pool_lait_entier', sur users.system_role
-);
-
--- Positions des users (stock de lait détenu)
-CREATE TABLE milk_positions (
-  username      VARCHAR(64) NOT NULL REFERENCES users(username),
-  pool_id       INT NOT NULL REFERENCES milk_pools(id),
-  balance_milk  BIGINT NOT NULL DEFAULT 0,    -- milliunités
-  avg_cost      FLOAT NOT NULL DEFAULT 0,     -- prix moyen d'achat (pour P&L UI)
-  PRIMARY KEY (username, pool_id)
-);
-
-CREATE TABLE milk_trades (
-  id              SERIAL PRIMARY KEY,
-  pool_id         INT NOT NULL REFERENCES milk_pools(id),
-  username        VARCHAR(64) NOT NULL,
-  side            VARCHAR(4) NOT NULL,           -- 'buy' | 'sell'
-  amount_camp_in  BIGINT NOT NULL DEFAULT 0,     -- buy: CAMP misés, sell: 0
-  amount_milk_in  BIGINT NOT NULL DEFAULT 0,     -- buy: 0, sell: milk vendu
-  amount_camp_out BIGINT NOT NULL DEFAULT 0,     -- buy: 0, sell: CAMP reçus
-  amount_milk_out BIGINT NOT NULL DEFAULT 0,     -- buy: milk reçu, sell: 0
-  fee             BIGINT NOT NULL DEFAULT 0,
-  price_before    FLOAT NOT NULL,
-  price_after     FLOAT NOT NULL,
-  ts              TIMESTAMP DEFAULT NOW(),
-  tx_hash         VARCHAR(66) NULL               -- pour les buys (lock) ou sells (release)
-);
-CREATE INDEX idx_milk_trades_pool_ts ON milk_trades(pool_id, ts DESC);
-
-CREATE TABLE milk_chaos_events (
-  id             SERIAL PRIMARY KEY,
-  pool_id        INT NOT NULL REFERENCES milk_pools(id),
-  kind           VARCHAR(32) NOT NULL,        -- 'famine' | 'overstock' | 'spoil' | 'import'
-  delta_milk     BIGINT NOT NULL,             -- signé (négatif = retrait)
-  reserve_milk_before  BIGINT NOT NULL,
-  reserve_milk_after   BIGINT NOT NULL,
-  price_before   FLOAT NOT NULL,
-  price_after    FLOAT NOT NULL,
-  narrative      VARCHAR(256),                -- "Maladie de Lyon, -300 bouteilles"
-  triggered_by   VARCHAR(16) NOT NULL,        -- 'bot' | 'admin'
-  ts             TIMESTAMP DEFAULT NOW()
-);
-CREATE INDEX idx_milk_chaos_pool_ts ON milk_chaos_events(pool_id, ts DESC);
-```
-
-### 6.3 Math AMM
-
-```python
-# services/amm.py
-def buy_quote(pool, camp_in: int) -> dict:
-    """Combien de milk je reçois en mettant `camp_in` CAMP."""
-    fee = int(camp_in * pool.fee_pct / 100)
-    camp_in_net = camp_in - fee
-    new_reserve_camp = pool.reserve_camp + camp_in_net
-    new_reserve_milk = pool.reserve_camp * pool.reserve_milk // new_reserve_camp  # k préservé
-    milk_out = pool.reserve_milk - new_reserve_milk
-    return {
-        "milk_out": milk_out,
-        "fee": fee,
-        "price_before": pool.reserve_camp / pool.reserve_milk,
-        "price_after":  new_reserve_camp / new_reserve_milk,
-        "new_reserve_camp": new_reserve_camp,
-        "new_reserve_milk": new_reserve_milk,
-    }
-
-def sell_quote(pool, milk_in: int) -> dict:
-    new_reserve_milk = pool.reserve_milk + milk_in
-    new_reserve_camp = pool.reserve_camp * pool.reserve_milk // new_reserve_milk
-    camp_out_gross = pool.reserve_camp - new_reserve_camp
-    fee = int(camp_out_gross * pool.fee_pct / 100)
-    camp_out = camp_out_gross - fee
-    return {
-        "camp_out": camp_out,
-        "fee": fee,
-        "price_before": pool.reserve_camp / pool.reserve_milk,
-        "price_after":  new_reserve_camp / new_reserve_milk,
-        "new_reserve_camp": new_reserve_camp,
-        "new_reserve_milk": new_reserve_milk,
-    }
-```
-
-Attention overflows : avec des `BIGINT` Postgres et `int` Python ça tient, mais bien tester.
-
-### 6.4 Endpoints
-
-```
-GET    /milk/pools                       liste pools actifs + prix courant + 24h change
-GET    /milk/pools/{symbol}/chart?range  données pour graphique (snapshots horaires)
-GET    /milk/pools/{symbol}/quote?side=buy|sell&amount=X     preview du swap
-POST   /milk/pools/{symbol}/swap         exécute le swap (avec max_slippage_pct)
-GET    /me/milk/positions                mes positions
-GET    /me/milk/trades                   mon historique de trades
-
-# Admin
-POST   /admin/milk/pools                 créer un pool (admin uniquement)
-PATCH  /admin/milk/pools/{id}            update fee_pct, chaos_enabled, status
-POST   /admin/milk/pools/{id}/inject     injecter manuellement du lait (chaos manuel)
-GET    /admin/milk/chaos                 historique des events chaos
-```
-
-### 6.5 Code swap
-
-```python
-@router.post("/milk/pools/{symbol}/swap")
-def swap(symbol: str, body: SwapIn, user=Depends(current_user), db=Depends(get_db)):
-    # Verrouiller le pool en SELECT FOR UPDATE pour éviter race conditions
-    pool = db.query(MilkPool).filter(MilkPool.symbol == symbol)\
-              .with_for_update().first()
-    if not pool or pool.status != "active":
-        raise HTTPException(404, "Pool indisponible")
-
-    if body.side == "buy":
-        q = buy_quote(pool, body.amount_camp_in)
-        # Protection slippage
-        expected_price = body.expected_price
-        if expected_price and abs(q["price_after"] - expected_price) / expected_price \
-                              > body.max_slippage_pct / 100:
-            raise HTTPException(400, "Slippage trop élevé, retente")
-        # Vérifier solde
-        bal = get_balance_camp(user.address)
-        if body.amount_camp_in > bal:
-            raise HTTPException(400, f"Solde insuffisant ({bal} CAMP)")
-        # Lock CAMP vers le pool
-        tx = escrow.lock(db, user, pool.system_role, body.amount_camp_in,
-                         f"milk swap buy {symbol}")
-        # Mettre à jour réserves + position user
-        pool.reserve_camp = q["new_reserve_camp"]
-        pool.reserve_milk = q["new_reserve_milk"]
-        pos = db.query(MilkPosition).filter_by(
-            username=user.username, pool_id=pool.id
-        ).with_for_update().first()
-        if not pos:
-            pos = MilkPosition(username=user.username, pool_id=pool.id,
-                                balance_milk=0, avg_cost=0)
-            db.add(pos); db.flush()
-        # Update avg_cost pondéré
-        old_value = pos.balance_milk * pos.avg_cost
-        new_value = old_value + body.amount_camp_in
-        pos.balance_milk += q["milk_out"]
-        pos.avg_cost = new_value / pos.balance_milk if pos.balance_milk > 0 else 0
-        # Trade log
-        trade = MilkTrade(
-            pool_id=pool.id, username=user.username, side="buy",
-            amount_camp_in=body.amount_camp_in,
-            amount_milk_out=q["milk_out"], fee=q["fee"],
-            price_before=q["price_before"], price_after=q["price_after"],
-            tx_hash=tx,
-        )
-        db.add(trade)
-        db.commit()
-        return _trade_dict(trade)
-
-    elif body.side == "sell":
-        # Vérifier que le user a assez de milk
-        pos = db.query(MilkPosition).filter_by(
-            username=user.username, pool_id=pool.id
-        ).with_for_update().first()
-        if not pos or pos.balance_milk < body.amount_milk_in:
-            raise HTTPException(400, "Pas assez de lait à vendre")
-        q = sell_quote(pool, body.amount_milk_in)
-        # Vérifier que le pool a assez de CAMP
-        pool_bal = get_balance_camp_for_role(db, pool.system_role)
-        if q["camp_out"] > pool_bal:
-            raise HTTPException(500, "Pool insuffisant — incohérence, alerte admin")
-        # Mettre à jour positions + réserves
-        pos.balance_milk -= body.amount_milk_in
-        pool.reserve_camp = q["new_reserve_camp"]
-        pool.reserve_milk = q["new_reserve_milk"]
-        # Release CAMP du pool vers user
-        tx = escrow.release(db, pool.system_role,
-                             db.get(User, user.username),
-                             q["camp_out"],
-                             f"milk swap sell {symbol}")
-        trade = MilkTrade(
-            pool_id=pool.id, username=user.username, side="sell",
-            amount_milk_in=body.amount_milk_in,
-            amount_camp_out=q["camp_out"], fee=q["fee"],
-            price_before=q["price_before"], price_after=q["price_after"],
-            tx_hash=tx,
-        )
-        db.add(trade)
-        db.commit()
-        return _trade_dict(trade)
-```
-
-`SELECT FOR UPDATE` sur le pool est crucial pour éviter qu'Alice et Hugo qui swappent en même temps voient le même `reserve_*` et créent des incohérences (front-running / TOCTOU classique sur AMM).
-
-### 6.6 Bot chaos
-
-```python
-# services/chaos_bot.py
-import random
-from apscheduler.schedulers.background import BackgroundScheduler
-
-NARRATIVES = {
-    "famine":    ("famine_negative", "Sécheresse en Normandie, -{pct}% du stock"),
-    "spoil":     ("famine_negative", "Lot du 14 contaminé, retrait sanitaire de {n} bouteilles"),
-    "overstock": ("famine_positive", "Surproduction en Bretagne, +{n} bouteilles offertes"),
-    "import":    ("famine_positive", "Import suisse exceptionnel, +{pct}% du stock"),
-}
-
-def tick():
-    """Appelé périodiquement par scheduler. Décide ou pas d'agir."""
-    with SessionLocal() as db:
-        for pool in db.query(MilkPool).filter(
-            MilkPool.status == "active", MilkPool.chaos_enabled == True
-        ).all():
-            # Petite chance par tick
-            if random.random() > 0.05:   # 5% par tick
-                continue
-            apply_chaos(db, pool)
-
-def apply_chaos(db, pool):
-    kind = random.choices(
-        ["famine", "spoil", "overstock", "import"],
-        weights=[2, 3, 2, 3], k=1
-    )[0]
-    if kind in ("famine", "import"):
-        # variation par pourcentage du stock
-        pct = random.uniform(5, 25)
-        delta = int(pool.reserve_milk * pct / 100)
-        if kind == "famine": delta = -delta
-        narrative = NARRATIVES[kind][1].format(pct=round(pct, 1))
-    else:
-        # variation absolue
-        n = random.randint(50, 500)
-        delta = -n if kind == "spoil" else n
-        narrative = NARRATIVES[kind][1].format(n=n)
-
-    # Bornes : ne jamais vider complètement (sinon prix = ∞)
-    new_milk = pool.reserve_milk + delta
-    if new_milk < 1000:    # garde-fou
-        return
-
-    price_before = pool.reserve_camp / pool.reserve_milk
-    pool.reserve_milk = new_milk
-    price_after = pool.reserve_camp / pool.reserve_milk
-
-    db.add(MilkChaosEvent(
-        pool_id=pool.id, kind=kind, delta_milk=delta,
-        reserve_milk_before=pool.reserve_milk - delta,
-        reserve_milk_after=pool.reserve_milk,
-        price_before=price_before, price_after=price_after,
-        narrative=narrative, triggered_by="bot",
-    ))
-    db.commit()
-    # Optionnel : push notification temps réel via WS si user connecté
-
-# Au démarrage de FastAPI :
-scheduler = BackgroundScheduler()
-scheduler.add_job(tick, "interval", minutes=15, id="milk_chaos")
-scheduler.start()
-```
-
-Note importante : **le bot ne touche que `reserve_milk`, jamais `reserve_camp`**. C'est ce qui préserve la propriété "somme nulle des CAMP dans le système". Quand la famine retire 300 bouteilles, le prix monte parce que `k` reste virtuellement inchangé (en pratique, k = reserve_camp × nouvelle reserve_milk, donc k bouge aussi, mais la quantité totale de CAMP dans tout le système reste fixe).
-
-### 6.7 Snapshot pour graphique
-
-Pour le chart, on log un snapshot toutes les heures (cron):
-
-```sql
-CREATE TABLE milk_price_history (
-  pool_id      INT NOT NULL REFERENCES milk_pools(id),
-  ts           TIMESTAMP NOT NULL,
-  price        FLOAT NOT NULL,
-  reserve_camp BIGINT NOT NULL,
-  reserve_milk BIGINT NOT NULL,
-  PRIMARY KEY (pool_id, ts)
-);
-```
-
-Le placeholder `MilkView.vue` actuel a déjà un graphique SVG sympa — le brancher dessus. Récupérer `/milk/pools/{symbol}/chart?range=24h` → array de `{ts, price}`, renderer en SVG path.
-
-### 6.8 Front
-
-- **`MilkHomeView.vue`** : grid des pools avec prix courant + variation 24h + sparkline
-- **`MilkTradeView.vue`** : un pool sélectionné
-  - Big graph (chart.js, ou ton SVG actuel adapté)
-  - Buy/sell tabs
-  - Input avec preview quote en live (debounced GET `/quote`)
-  - Slider de slippage tolérance
-  - Bouton "Swap" → POST
-  - Tape de trades récents
-  - Tape d'événements chaos avec narrative (sympa pour la lore)
-  - Position personnelle : balance + P&L (valeur courante - avg_cost * balance)
-
----
-
 ## 7. Points d'attention
 
 ### 7.1 Sécurité : escrow et comptes système
@@ -1003,12 +419,14 @@ Pour les paris : un user peut spammer des paris ridicules pour bloquer son propr
 - **Casino "live"** : roulette commune où plusieurs joueurs misent sur le même spin (à intervalle fixe). Plus social.
 - **Programme de fidélité** : XP par CAMP misé, niveaux qui donnent des bonus (réduction d'edge, freebets).
 
-### 8.3 Évolutions de la bourse du lait
+### 8.3 Évolutions de la bourse du lait (module livré)
 
-- **Plusieurs pools = paniers d'arbitrage** : si tu as LAIT-ENTIER et LAIT-DEMI, un user peut arb entre les deux. Lore : "fais ton fromage avec du lait entier".
-- **Liquidity providers** : actuellement seul l'admin amorce le pool. On peut autoriser les users à provisionner du CAMP+lait dans le pool (mint LP tokens) et toucher une part des fees. Très Uniswap.
-- **Événements scriptés** : pas juste un bot random, mais une "saison" avec une narrative (été = surproduction = prix bas, hiver = pénurie). Plus de gameplay, moins d'arbitraire.
-- **Marchés "futures"** : pari sur le prix du lait à T+30j. Recombine paris + bourse du lait, joli.
+Le module est en place avec : multi-pools, bot chaos avec ~33 templates pondérés, cap de volatilité, analyse d'espérance banque (voir `services/milk.py::chaos_analysis`), valeur réalisable (sell-quote sur tout le stock) côté UI. Pistes d'évolution :
+
+- **Plusieurs pools = paniers d'arbitrage** : créer `LAIT-DEMI`, `BEURRE`, `EMMENTAL` et laisser les users arb entre eux. Lore : "fais ton fromage avec du lait entier".
+- **Liquidity providers** : actuellement seul l'admin amorce le pool. On peut autoriser les users à provisionner du CAMP+lait dans le pool (mint LP tokens) et toucher une part des fees. Très Uniswap. Nécessiterait une refonte du modèle de position (passer de `balance_milk` simple à un système de parts).
+- **Événements scriptés / saisons** : à la place du bot random, séquencer une saison narrative (été = surproduction = prix bas, hiver = pénurie). Plus de gameplay, moins d'arbitraire. Les `MilkChaosTemplate` existants pourraient être groupés en "saisons" enableables.
+- **Marchés "futures"** : pari sur le prix du lait à T+30j. Recombine module Paris + Bourse du Lait. Joli mais demande une infrastructure de settlement périodique.
 
 ### 8.4 Évolutions cross-module
 
@@ -1020,11 +438,10 @@ Pour les paris : un user peut spammer des paris ridicules pour bloquer son propr
 
 ### 8.5 Priorisation conseillée
 
-Modules déjà livrés (cf. `AGENTS.md`) : **Paris**, **Pile ou face**, **Roulette**.
+Modules déjà livrés (cf. `AGENTS.md`) : **Paris** (v2), **Pile ou face**, **Roulette**, **Slots**, **Bourse du Lait** (avec bot chaos + templates).
 
-Ordre suggéré pour les modules restants :
+Reste :
 
-1. **Bourse du lait** (§6) : le plus original conceptuellement, gameplay fort. ~5-7 jours.
-2. **Poker** (§5) : très gros chantier, à attaquer en bloc dédié. ~10-15 jours minimum si bien fait.
+1. **Poker** (§5) : très gros chantier, à attaquer en bloc dédié. ~10-15 jours minimum si bien fait. Demande WebSockets, state machine en mémoire, sprites de cartes, et un client Vue dédié.
 
-Le pattern escrow + comptes système + RNG vérifiable (§1) reste un pré-requis transverse à mettre en place côté infra (en partie déjà fait pour Paris : `bets_escrow` créé, `services/escrow.py` réutilisable, migrations v4/v5 appliquées).
+Pré-requis déjà en place : `services/escrow.py` (réutilisable pour `poker_bank`), `services/randomness.py` (commit-reveal pour le shuffle deck), comptes système, `app_settings` pour les paramètres tweakables à chaud. À envisager avant le poker : migrer vers Alembic et brancher l'audit comptable §1.2.
