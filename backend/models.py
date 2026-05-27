@@ -383,6 +383,83 @@ class MilkChaosEvent(Base):
     ts = Column(DateTime, server_default=func.now(), nullable=False, index=True)
 
 
+class PokerTable(Base):
+    """
+    Table de poker Texas Hold'em No-Limit. Plusieurs tables en parallele.
+    Status 'open' : accepte les sit-in. 'closed' : on finit les mains
+    en cours mais on n'accepte plus personne.
+    """
+    __tablename__ = "poker_tables"
+    __table_args__ = {"schema": DB_SCHEMA}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(64), nullable=False)
+    blind_small = Column(Integer, nullable=False)
+    blind_big = Column(Integer, nullable=False)
+    min_buyin = Column(Integer, nullable=False)
+    max_buyin = Column(Integer, nullable=False)
+    max_players = Column(Integer, nullable=False, default=6)
+    status = Column(String(16), nullable=False, default="open")
+    # NULL = table cree par l'admin. Sinon = pseudo du joueur createur,
+    # qui peut la supprimer lui-meme.
+    creator_username = Column(String(64), nullable=True, index=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+class PokerSession(Base):
+    """
+    Un siege occupe par un joueur. left_at IS NULL => actif.
+    `stack` est le stack off-chain devant le joueur. Les CAMP correspondants
+    sont sur le wallet 'poker_bank' (system_role) — escrow lock au sit-in,
+    release au sit-out.
+    """
+    __tablename__ = "poker_sessions"
+    __table_args__ = {"schema": DB_SCHEMA}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    table_id = Column(Integer, nullable=False, index=True)
+    username = Column(String(64), nullable=False, index=True)
+    seat = Column(Integer, nullable=False)
+    stack = Column(BigInteger, nullable=False)
+    initial_stack = Column(BigInteger, nullable=False)
+    joined_at = Column(DateTime, server_default=func.now(), nullable=False)
+    left_at = Column(DateTime, nullable=True)
+    tx_hash_buyin = Column(String(66), nullable=True)
+    tx_hash_cashout = Column(String(66), nullable=True)
+
+
+class PokerHand(Base):
+    """
+    Une main jouee a une table. `hand_log` contient un blob JSON avec
+    l'etat complet de la main (deck restant, joueurs, street, pot, etc.)
+    et la sequence d'actions. ended_at IS NULL => main en cours.
+    """
+    __tablename__ = "poker_hands"
+    __table_args__ = {"schema": DB_SCHEMA}
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    table_id = Column(Integer, nullable=False, index=True)
+    hand_number = Column(Integer, nullable=False)
+    dealer_seat = Column(Integer, nullable=False)
+    board_cards = Column(String(20), nullable=True)
+    pot = Column(BigInteger, nullable=False, default=0)
+    winners_json = Column(Text, nullable=True)
+    hand_log = Column(Text, nullable=False, default="{}")
+    rng_seed_id = Column(Integer, nullable=False)
+    started_at = Column(DateTime, server_default=func.now(), nullable=False)
+    ended_at = Column(DateTime, nullable=True)
+
+
+class PokerHandHole(Base):
+    """Cartes privees par joueur pour une main donnee."""
+    __tablename__ = "poker_hand_holes"
+    __table_args__ = {"schema": DB_SCHEMA}
+
+    hand_id = Column(Integer, primary_key=True)
+    username = Column(String(64), primary_key=True)
+    hole_cards = Column(String(8), nullable=False)
+
+
 class SlotsSpin(Base):
     """
     Un spin de machine a sous (3 rouleaux, single payline, paye sur

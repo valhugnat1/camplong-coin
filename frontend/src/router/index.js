@@ -72,6 +72,19 @@ const routes = [
     meta: { needsUser: true },
   },
   {
+    path: "/casino/poker",
+    name: "casino-poker",
+    component: () => import("@/views/PokerView.vue"),
+    meta: { needsUser: true },
+  },
+  {
+    path: "/casino/poker/:id",
+    name: "casino-poker-table",
+    component: () => import("@/views/casino/PokerTableView.vue"),
+    meta: { needsUser: true },
+    props: true,
+  },
+  {
     path: "/milk",
     name: "milk",
     component: () => import("@/views/MilkView.vue"),
@@ -144,6 +157,12 @@ const routes = [
     path: "/admin/milk",
     name: "admin-milk",
     component: () => import("@/views/admin/AdminMilkView.vue"),
+    meta: { needsAdmin: true },
+  },
+  {
+    path: "/admin/poker",
+    name: "admin-poker",
+    component: () => import("@/views/admin/AdminPokerView.vue"),
     meta: { needsAdmin: true },
   },
 

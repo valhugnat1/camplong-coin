@@ -38,6 +38,13 @@
           🪙 Casino
         </router-link>
         <router-link
+          to="/admin/poker"
+          class="nav-link"
+          :class="{ active: $route.path.startsWith('/admin/poker') }"
+        >
+          🃏 Poker
+        </router-link>
+        <router-link
           to="/admin/milk"
           class="nav-link"
           :class="{ active: $route.path.startsWith('/admin/milk') }"

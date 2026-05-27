@@ -78,6 +78,7 @@ const games = [
     name: "Poker (Texas)",
     desc: "Bluffe tes potes. Ruine-toi en famille.",
     rtp: 100,
+    to: "/casino/poker",
   },
   {
     icon: "🎲",

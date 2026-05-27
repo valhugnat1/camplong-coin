@@ -5,7 +5,7 @@ import random
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import admin, users, bets, casino, milk
+from routers import admin, users, bets, casino, milk, poker
 from config import CONTRACT_ADDRESS
 from database import DB_SCHEMA, SessionLocal
 from models import MilkPool
@@ -28,6 +28,7 @@ router.include_router(users.router)
 router.include_router(bets.router)
 router.include_router(casino.router)
 router.include_router(milk.router)
+router.include_router(poker.router)
 
 
 # ─── Chaos bot (Bourse du Lait) ────────────────────────

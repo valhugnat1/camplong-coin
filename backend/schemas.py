@@ -177,6 +177,42 @@ class AdminMilkTemplateUpdateIn(BaseModel):
     enabled: Optional[bool] = None
 
 
+# ─── Poker ─────────────────────────────────────────────
+
+class PokerSitIn(BaseModel):
+    buyin: int = Field(..., gt=0)
+
+
+class PokerActIn(BaseModel):
+    """
+    Une action a la table : fold/check/call/bet/raise.
+    Pour bet : `amount` = montant misé (>= min_raise).
+    Pour raise : `amount` = NOUVEAU total de mise visee (pas l'increment).
+    Pour fold/check/call : `amount` est ignore.
+    """
+    move: Literal["fold", "check", "call", "bet", "raise"]
+    amount: int = Field(0, ge=0)
+
+
+class PokerCreateTableIn(BaseModel):
+    """Creation d'une table cote joueur (et admin : meme payload)."""
+    name: str = Field(..., min_length=1, max_length=64)
+    blind_small: int = Field(..., gt=0)
+    blind_big: int = Field(..., gt=0)
+    min_buyin: int = Field(..., gt=0)
+    max_buyin: int = Field(..., gt=0)
+    max_players: int = Field(6, ge=2, le=10)
+
+
+# Alias historique pour l'admin (meme schema). Conserve pour ne pas
+# casser les imports existants.
+AdminPokerCreateTableIn = PokerCreateTableIn
+
+
+class AdminPokerUpdateTableIn(BaseModel):
+    status: Optional[Literal["open", "closed"]] = None
+
+
 # ─── App settings (admin) ──────────────────────────────
 
 class SettingUpdateIn(BaseModel):
