@@ -1,16 +1,17 @@
-# EXTENSIONS.md — Module Poker (à venir)
+# EXTENSIONS.md — Pistes d'évolutions transverses
 
-Spec technique du seul module **non encore implémenté** : le **Poker**. Ce document complète `AGENTS.md` et ne le remplace pas.
+Toutes les modules métier de CamplongCoin sont **livrés** et documentés dans `AGENTS.md`. Ce fichier liste ce qu'il reste à creuser : points d'attention cross-cutting (sécurité, audit comptable, tests, scalabilité) et idées d'évolutions / nouveaux jeux à ajouter.
 
-> Modules **déjà livrés** (spec déplacée dans `AGENTS.md`) :
+> Modules livrés (spec dans `AGENTS.md`) :
 > - **Paris** (P2P bets — refonte mai 2026)
 > - **Casino — Pile ou Face** (coinflip, edge configurable à chaud)
 > - **Casino — Roulette** (européenne, 37 cases)
 > - **Casino — Slots** (3 rouleaux, single payline, RTP ~90%)
+> - **Casino — Poker** (Texas Hold'em No-Limit, état off-chain, polling 2 s, RNG vérifiable)
 > - **Bourse du Lait** (AMM x·y=k, bot chaos, templates éditables, cap volatilité)
 >
 > Les patterns transverses (comptes système, escrow, RNG vérifiable,
-> `app_settings`) sont également documentés dans `AGENTS.md`.
+> `app_settings`, tables `poker_*` & cascade delete) sont documentés dans `AGENTS.md`.
 
 > Lecture conseillée : `AGENTS.md` d'abord (architecture custodial, contrat, blockchain.py, schémas test/prod, tous les modules livrés).
 
@@ -18,291 +19,48 @@ Spec technique du seul module **non encore implémenté** : le **Poker**. Ce doc
 
 ## Table des matières
 
-1. [Vue d'ensemble & points encore valables](#1-vue-densemble--points-encore-valables)
-2. [Module Casino — Poker](#5-module-casino--poker)
-3. [Points d'attention](#7-points-dattention)
-4. [Améliorations & autres jeux possibles](#8-améliorations--autres-jeux-possibles)
+1. [Vue d'ensemble & audit comptable](#1-vue-densemble--audit-comptable)
+2. [Points d'attention](#7-points-dattention)
+3. [Améliorations & autres jeux possibles](#8-améliorations--autres-jeux-possibles)
 
-> Les ancres des sections gardent leur numérotation d'origine (5, 7, 8) ;
-> seule la TOC a été renumérotée. La section 6 (Bourse du Lait) a été
-> supprimée puisque le module est livré.
+> Les ancres des sections gardent leur numérotation d'origine (7, 8) ;
+> seule la TOC a été renumérotée. Les sections 5 (Poker) et 6 (Bourse du
+> Lait) ont été supprimées puisque les modules sont livrés.
 
 ---
 
-## 1. Vue d'ensemble & points encore valables
+## 1. Vue d'ensemble & audit comptable
 
-### 1.1 Principes directeurs
+### 1.1 Récap des patterns on-chain
 
-Le projet est passé d'un seul concept simple (transfer P2P + market orders manuels) à une plateforme de jeu avec 5 produits livrés. Pour le poker, qui reste à faire, ces principes s'appliquent toujours.
+Tous les modules métier sont livrés. Récap rapide des coûts on-chain par cycle de jeu (utile à garder en tête avant d'ajouter un nouveau jeu) :
 
-**On-chain vs off-chain.** L'`adminTransfer` on-chain pour chaque mouvement est OK pour les transferts P2P (volume faible, latence ~2s). C'est intenable pour le poker (multiples mises par main). On adopte le pattern **escrow on-chain + livre off-chain** : les fonds bougent on-chain au sit-in et au sit-out, les actions de jeu intermédiaires (check/raise/fold) restent en DB.
+| Module | Pattern | Tx on-chain par cycle |
+|---|---|---|
+| Paris | Escrow on-chain immédiat | 3 (mise creator + mise matcher + settlement) |
+| Pile ou Face | On-chain par flip | 2 (mise + payout) — 1 seule si perte (pas de release) |
+| Roulette | On-chain par spin | 2 (mises agrégées + payout net) — 1 seule si perte |
+| Slots | On-chain par spin | 2 (mise + payout) — 1 seule si perte |
+| Bourse du Lait | On-chain par swap | 2 (lock CAMP + release lait→CAMP) |
+| Poker | Sit-in / sit-out only | 2 par session (deposit + withdraw), peu importe le nombre de mains jouées |
 
-| Module | Pattern | Tx on-chain par cycle | Statut |
-|---|---|---|---|
-| Paris | Escrow on-chain immédiat | 3 (mise creator + mise matcher + settlement) | ✅ livré |
-| Pile ou Face | On-chain par flip | 2 (mise + payout) — 1 seule si perte (pas de release) | ✅ livré |
-| Roulette | On-chain par spin | 2 (mises agrégées + payout net) — 1 seule si perte | ✅ livré |
-| Slots | On-chain par spin | 2 (mise + payout) — 1 seule si perte | ✅ livré |
-| Bourse du Lait | On-chain par swap | 2 (lock CAMP + release lait→CAMP) | ✅ livré |
-| Poker | Sit-in / sit-out only | 2 par session (deposit + withdraw), peu importe le nombre de mains | à faire |
+**Patterns transverses utilisables pour les futurs jeux** :
+- `users.account_type='system'` + `system_role` (treasury, casino_bank, bets_escrow, poker_bank, milk_pool_*) — déjà créés par `seed_system_accounts.py`.
+- `services/escrow.py::lock/release` — la primitive pour faire bouger des CAMP user ↔ compte système.
+- `services/randomness.py` (commit-reveal sha256 + `derive_int`) — RNG vérifiable, réutilisable.
+- `app_settings` + `services/settings.py` pour les paramètres tweakables à chaud sans redéploiement.
 
-**Comptes système, escrow, RNG vérifiable.** Tous ces patterns sont en place et documentés dans `AGENTS.md` :
-- `users.account_type='system'` + `system_role` (treasury, casino_bank, bets_escrow, milk_pool_*) — déjà créés par `seed_system_accounts.py`.
-- `services/escrow.py::lock/release` — réutilisable tel quel pour le `poker_bank` (sit-in/sit-out).
-- `services/randomness.py` (commit-reveal sha256 + `derive_int`) — réutilisable pour le shuffle du deck poker.
-
-Côté refactoring de structure (split en sous-modules `routers/casino/poker.py` etc.) et migrations Alembic, ce n'est toujours pas fait — on est resté sur la convention plate + `migrate_v*.py` qui a tenu jusqu'à 15+ tables. C'est probablement le bon moment pour basculer si on attaque le poker, mais ce n'est pas un bloqueur.
+Côté refactoring (split en sous-modules, migrations Alembic), on est resté sur la convention plate + `migrate_v*.py` (16+ tables, 10 migrations à ce jour). À envisager si on attaque un module aussi gros que le poker ; pas un bloqueur aujourd'hui.
 
 ### 1.2 Audit comptable (non implémenté)
 
-Avec 5 modules qui bougent du CAMP, la question "où sont passés mes 1 000 000 CAMP" devient non triviale. Endpoint admin `/admin/audit` souhaitable :
+Avec 6 modules qui bougent du CAMP (paris, coinflip, roulette, slots, lait, poker), la question "où sont passés mes 1 000 000 CAMP" devient non triviale. Endpoint admin `/admin/audit` souhaitable :
 
 ```
 treasury balance + system_account balances + sum(user balances) == total_supply ?
 ```
 
-Si ça ne matche pas, il y a un bug. Cron 1×/jour + alerte email à l'admin si écart > 0.01 CAMP. Pas encore en place — à ajouter quand le poker arrive (multiplie les chemins).
-
----
-
-## 5. Module Casino — Poker
-
-### 5.1 Pourquoi ce module est spécifique
-
-Le poker casse toutes les hypothèses du projet :
-- **Multi-joueurs synchrones** (3 à 8 à une table) → WebSockets obligatoires
-- **Nombreuses actions par main** (check, call, raise, fold, all-in) → impossible de faire on-chain par action
-- **Tours en temps réel** avec timer → état serveur complexe
-- **Cartes cachées** par joueur → pas de "vue partagée" simple
-
-Décision claire : **état du jeu off-chain (en DB + en mémoire serveur), mouvements on-chain uniquement au sit-in (deposit) et sit-out (withdraw)**.
-
-### 5.2 Bibliothèques recommandées
-
-**Backend :**
-- [`treys`](https://github.com/ihendley/treys) (Python) — évaluation de mains 5/7 cartes ultra-rapide, MIT. *Indispensable*, ne réimplémente pas le hand evaluator toi-même (sujet horrible : straight wheels, kickers, équivalences).
-- [`pokerengine`](https://github.com/Ishinoshita/pokerengine) ou [`pypokerengine`](https://github.com/ishikota/PyPokerEngine) — moteur de tour de jeu complet (street progression, side pots, etc.) pour Texas Hold'em. Apporte beaucoup mais pas testé récemment, attention au fork.
-- Alternative : coder l'engine toi-même (~800 lignes Python) en utilisant `treys` juste pour l'évaluation. Plus de contrôle, faisable.
-
-**Frontend :**
-- **Pas de framework "poker en Vue" mature.** Repo `vue-poker` GitHub est mort.
-- Composants Vue maison : table (canvas ou SVG), cartes (composant `<PlayingCard suit="h" rank="A"/>`), joueurs (avatars + stack + bouton actuel), actions (call/raise/fold + slider).
-- Sprite des cartes : [`svg-cards`](https://github.com/htdebeer/SVG-cards) (sprites SVG MIT, 52 cartes prêtes), ou utilise Unicode (♠♥♦♣) avec du CSS.
-- ~600-800 lignes de Vue pour un client poker propre.
-
-### 5.3 Schéma DB
-
-```sql
--- Une table de poker, persistante. Plusieurs tables en parallèle.
-CREATE TABLE poker_tables (
-  id             SERIAL PRIMARY KEY,
-  name           VARCHAR(64) NOT NULL,
-  blind_small    INT NOT NULL,            -- en CAMP
-  blind_big      INT NOT NULL,
-  min_buyin      INT NOT NULL,
-  max_buyin      INT NOT NULL,
-  max_players    INT NOT NULL DEFAULT 6,
-  status         VARCHAR(16) NOT NULL DEFAULT 'open',
-  -- 'open' | 'closed' (close = ne plus accepter de sit-in, mais finir les mains en cours)
-  created_at     TIMESTAMP DEFAULT NOW()
-);
-
--- Un siège occupé par un joueur. stack = CAMP devant lui à table (off-chain).
-CREATE TABLE poker_sessions (
-  id             SERIAL PRIMARY KEY,
-  table_id       INT NOT NULL REFERENCES poker_tables(id),
-  username       VARCHAR(64) NOT NULL REFERENCES users(username),
-  seat           INT NOT NULL,            -- 0..max_players-1
-  stack          BIGINT NOT NULL,         -- stack actuel
-  initial_stack  BIGINT NOT NULL,         -- buy-in initial
-  joined_at      TIMESTAMP DEFAULT NOW(),
-  left_at        TIMESTAMP NULL,
-  tx_hash_buyin     VARCHAR(66) NULL,
-  tx_hash_cashout   VARCHAR(66) NULL,
-  UNIQUE(table_id, seat, left_at)        -- un siège libre quand left_at IS NOT NULL
-);
-CREATE INDEX idx_poker_sessions_active ON poker_sessions(table_id, left_at);
-
--- Chaque main complète jouée.
-CREATE TABLE poker_hands (
-  id            SERIAL PRIMARY KEY,
-  table_id      INT NOT NULL REFERENCES poker_tables(id),
-  hand_number   INT NOT NULL,            -- séquentiel par table
-  dealer_seat   INT NOT NULL,
-  board_cards   VARCHAR(20),             -- ex: 'Ah Kd 7s 2c Th' (post-river)
-  pot           BIGINT NOT NULL DEFAULT 0,
-  winners_json  TEXT NULL,               -- [{"username": "Hugo", "amount": 120, "hand": "two pair"}]
-  hand_log      TEXT NOT NULL,           -- JSON de toutes les actions (street/action/amount)
-  rng_seed_id   INT NOT NULL REFERENCES rng_seeds(id),  -- pour le deck
-  started_at    TIMESTAMP DEFAULT NOW(),
-  ended_at      TIMESTAMP NULL,
-  UNIQUE(table_id, hand_number)
-);
-
--- État volatile en cours de partie : qui a quelle main, etc.
--- Ces données sont sensibles (révèlent les cartes). À garder server-side uniquement.
-CREATE TABLE poker_hand_holes (
-  hand_id      INT NOT NULL REFERENCES poker_hands(id),
-  username     VARCHAR(64) NOT NULL,
-  hole_cards   VARCHAR(8) NOT NULL,      -- ex: 'Ah Kd'
-  PRIMARY KEY (hand_id, username)
-);
-```
-
-### 5.4 Architecture runtime
-
-```
-┌──────────────────┐  WebSocket  ┌────────────────────────┐
-│   Vue Client     │ ◄─────────► │  FastAPI WebSocket     │
-│ - subscribe/play │             │  /ws/poker/{table_id}  │
-└──────────────────┘             └───────────┬────────────┘
-                                             │
-                                             ▼
-                              ┌────────────────────────────┐
-                              │ TableManager (in-memory)   │
-                              │  - state machine par table │
-                              │  - action queue            │
-                              │  - timer par tour          │
-                              └───────────┬────────────────┘
-                                          │
-                                          ▼
-                                  ┌───────────────┐
-                                  │  Postgres     │
-                                  │  (persist)    │
-                                  └───────────────┘
-```
-
-Le serveur FastAPI tient en mémoire une instance `TableManager` par table active. Lors des arrêts/redéploiements, l'état est reconstruit depuis la DB (`poker_sessions` actifs, dernière main en cours), ou la main en cours est annulée avec refund (selon politique).
-
-**Caveat critique** : si le backend tourne en plusieurs instances (scale horizontal), le state in-memory ne fonctionne plus. Soit on garde 1 instance (suffisant pour 7 potes), soit on passe par Redis pour le state partagé. Pour CamplongCoin v1, 1 instance suffit largement, mais documenter cette limite.
-
-### 5.5 Endpoints HTTP + WebSocket
-
-```
-# HTTP — gestion lobby & sit-in
-POST   /casino/poker/tables               créer une table (admin only)
-GET    /casino/poker/tables               liste des tables (avec joueurs courants)
-POST   /casino/poker/tables/{id}/sit      sit-in (buy-in, lock fonds vers poker_bank)
-POST   /casino/poker/tables/{id}/leave    sit-out (cashout stack actuel)
-GET    /casino/poker/tables/{id}/state    snapshot state (utile au reload, hors mains en cours)
-GET    /me/poker/history                  mes mains jouées
-
-# WebSocket — gameplay
-WS     /ws/poker/{table_id}
-       client → server :
-         {"action": "subscribe"}
-         {"action": "play", "move": "fold" | "check" | "call" | "raise", "amount": int}
-       server → client :
-         {"type": "state", ...}              # snapshot complet (au connect)
-         {"type": "deal_hole", "cards": "Ah Kd"}    # privé, à toi seulement
-         {"type": "action", "username": "Alice", "move": "raise", "amount": 20}
-         {"type": "deal_board", "cards": "..."}    # flop/turn/river
-         {"type": "hand_end", "winners": [...], "showdown": {...}}
-         {"type": "timer", "username": "Hugo", "remaining_ms": 28000}
-```
-
-### 5.6 Cycle d'une main
-
-```
-1. État de table : N joueurs sit-in avec stack ≥ blind_big
-2. Allocate next dealer button (rotation).
-3. Commit RNG seed pour le deck.
-4. Shuffle deck déterministe depuis seed.
-5. Post small blind & big blind (déduits des stacks).
-6. Distribute hole cards (privées via WS).
-7. Pre-flop betting round (chaque joueur agit en ordre).
-8. Flop (3 cartes board) → betting round.
-9. Turn (1 carte) → betting round.
-10. River (1 carte) → betting round.
-11. Showdown : eval treys, distribute pot (gérer side pots si all-in).
-12. Update stacks, persiste hand + holes.
-13. Reveal RNG seed → vérifiabilité du deck.
-14. Goto 2 (sauf si <2 joueurs avec stack > 0).
-```
-
-Si un joueur déconnecte / timeout : auto-fold à son tour. Si tout le monde sauf un fold, gagne le pot direct (pas de showdown).
-
-### 5.7 Sit-in / Sit-out on-chain
-
-```python
-@router.post("/casino/poker/tables/{table_id}/sit")
-def sit_in(table_id: int, body: SitInIn, user=Depends(current_user), db=Depends(get_db)):
-    table = db.get(PokerTable, table_id)
-    if not table or table.status != "open":
-        raise HTTPException(400, "Table non disponible")
-    if body.buyin < table.min_buyin or body.buyin > table.max_buyin:
-        raise HTTPException(400, "Buy-in hors limites")
-    # Vérifier siège libre
-    active = db.query(PokerSession).filter(
-        PokerSession.table_id == table_id, PokerSession.left_at.is_(None)
-    ).all()
-    if len(active) >= table.max_players:
-        raise HTTPException(400, "Table pleine")
-    if any(s.username == user.username for s in active):
-        raise HTTPException(400, "Déjà à cette table")
-    seat = next_free_seat(active, table.max_players)
-
-    # Lock
-    tx = escrow.lock(db, user, "poker_bank", body.buyin,
-                     f"poker table={table_id} buyin")
-    sess = PokerSession(
-        table_id=table_id, username=user.username, seat=seat,
-        stack=body.buyin, initial_stack=body.buyin,
-        tx_hash_buyin=tx,
-    )
-    db.add(sess); db.commit()
-    # Notifier les autres joueurs via WS (broadcast)
-    TableManager.get(table_id).broadcast({"type": "sit_in", "seat": seat, "username": user.username, "stack": body.buyin})
-    return _session_dict(sess)
-
-
-@router.post("/casino/poker/tables/{table_id}/leave")
-def sit_out(table_id: int, user=Depends(current_user), db=Depends(get_db)):
-    sess = db.query(PokerSession).filter(
-        PokerSession.table_id == table_id,
-        PokerSession.username == user.username,
-        PokerSession.left_at.is_(None),
-    ).first()
-    if not sess: raise HTTPException(404, "Pas à cette table")
-
-    mgr = TableManager.get(table_id)
-    if mgr.is_user_in_current_hand(user.username):
-        raise HTTPException(400, "Termine ta main en cours d'abord")
-
-    final_stack = sess.stack
-    if final_stack > 0:
-        tx = escrow.release(db, "poker_bank", user, final_stack,
-                            f"poker table={table_id} cashout")
-        sess.tx_hash_cashout = tx
-    sess.left_at = datetime.utcnow()
-    db.commit()
-    mgr.broadcast({"type": "sit_out", "username": user.username})
-    return _session_dict(sess)
-```
-
-### 5.8 Front
-
-Vues :
-- **`PokerView.vue`** (lobby) : liste tables avec nb joueurs, blinds, bouton "rejoindre"
-- **`PokerTableView.vue`** : la table elle-même
-  - Vue circulaire de la table (SVG ou CSS positions absolues)
-  - 6 sièges avec avatar / stack / cartes (dos ou face si showdown)
-  - Board cards au centre
-  - Pot affiché
-  - Toi en bas avec tes hole cards visibles + actions
-  - Slider pour raise
-  - Chat optionnel (sympa entre potes, ~50 lignes WS supplémentaires)
-
-Composants réutilisables :
-- `<PlayingCard suit="h" rank="A" :hidden="true" />` 
-- `<PlayerSeat :session="..." :is_current="..." :is_dealer="..." />`
-- `<ActionBar :legal_actions="..." @action="onAction" />`
-
-Effort estimé : ~1 semaine de dev frontend dédié si tu pars de zéro. C'est de loin le module le plus lourd.
-
-### 5.9 Provably fair pour le deck
-
-Le seed RNG permet de reproduire le shuffle du deck (Fisher-Yates seedé). Quand la main se termine, le serveur publie le seed → un joueur peut vérifier que le deck initial était bien `[As, 2h, ...]` etc. Si quelqu'un cheat en regardant la DB côté admin : la DB enregistre les `hole_cards` clairement, donc en interne c'est non-confidentiel — mais aucun joueur ne peut voir les cartes des autres pendant la partie via le client.
+Si ça ne matche pas, il y a un bug. Cron 1×/jour + alerte email à l'admin si écart > 0.01 CAMP. Le poker rajoute un compte système (`poker_bank`) qu'il faut inclure dans la somme.
 
 ---
 
@@ -408,7 +166,6 @@ Pour les paris : un user peut spammer des paris ridicules pour bloquer son propr
 |---|---|---|
 | **Dés** (mise sur un nombre 1-6) | 1-2j | Identique au coinflip, juste `derive_int(combined, 6)` |
 | **Crash** (mise + cashout dynamique) | 4-5j | Multiplicateur qui croît, joueur clique cashout avant explosion. Nécessite WS et un round commun. Provably fair via seed. |
-| **Slots** (3 rouleaux d'emojis) | 2-3j | Pur RNG. Définir une table de payouts par combinaison. |
 | **Plinko** | 3-4j | Bille qui rebondit sur des pegs, payouts en cases. Anim Phaser ou SVG. |
 | **Mines** (style Stake) | 2-3j | Grille N×N, M mines cachées. Mise + révèle cases progressivement. Payout multiplicateur monte à chaque case sûre. |
 | **Tour de Hanoï misé**, etc. | — | Aucune limite à l'imagination quand le pattern escrow est en place. |
@@ -438,10 +195,12 @@ Le module est en place avec : multi-pools, bot chaos avec ~33 templates pondér�
 
 ### 8.5 Priorisation conseillée
 
-Modules déjà livrés (cf. `AGENTS.md`) : **Paris** (v2), **Pile ou face**, **Roulette**, **Slots**, **Bourse du Lait** (avec bot chaos + templates).
+Tous les modules métier sont livrés (cf. `AGENTS.md`) : **Paris** (v2), **Pile ou face**, **Roulette**, **Slots**, **Poker** (Texas Hold'em No-Limit), **Bourse du Lait** (AMM + chaos bot).
 
-Reste :
+Pistes ordonnées par impact / coût décroissant :
 
-1. **Poker** (§5) : très gros chantier, à attaquer en bloc dédié. ~10-15 jours minimum si bien fait. Demande WebSockets, state machine en mémoire, sprites de cartes, et un client Vue dédié.
-
-Pré-requis déjà en place : `services/escrow.py` (réutilisable pour `poker_bank`), `services/randomness.py` (commit-reveal pour le shuffle deck), comptes système, `app_settings` pour les paramètres tweakables à chaud. À envisager avant le poker : migrer vers Alembic et brancher l'audit comptable §1.2.
+1. **Audit comptable** (§1.2) : cron quotidien + alerte si l'invariant `treasury + system_accounts + users == 1 000 000` casse. Faible coût, indispensable maintenant que 6 modules bougent du CAMP.
+2. **Tests automatisés** (§7.7) : la combinatoire grandit, AMM + paris + casino + poker = beaucoup de chemins. Quelques jours de pytest sur la math (`amm`, `eval_5`, side-pots poker, `chaos_analysis`) déjà très rentables.
+3. **Timeout auto-fold poker** : un joueur AFK bloque la table actuellement (mitigation = force-end admin). Background task qui auto-fold après N minutes ; aligner sur le pattern `_chaos_loop` côté `main.py`.
+4. **Nouveaux jeux additionnels** (§8.1) : dés / crash / plinko / mines — tous reposent sur les primitives en place, ~quelques jours par jeu.
+5. **Migration Alembic** : confort plus que nécessité ; 10 scripts `migrate_v*.py` à ce jour tiennent encore. À envisager si on dépasse 20.

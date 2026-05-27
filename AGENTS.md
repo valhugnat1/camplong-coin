@@ -13,10 +13,11 @@ Document destiné aux développeurs (humains ou agents IA) qui veulent contribue
 5. [Frontend](#frontend)
 6. [Module Paris (P2P bets)](#module-paris-p2p-bets)
 7. [Module Casino (coinflip + roulette + slots)](#module-casino-coinflip--roulette--slots)
-8. [Module Bourse du Lait (AMM)](#module-bourse-du-lait-amm)
-9. [Sécurité & secrets](#securite--secrets)
-10. [Déploiement](#deploiement)
-11. [Conventions & gotchas](#conventions--gotchas)
+8. [Module Casino — Poker (Texas Hold'em)](#module-casino--poker-texas-holdem)
+9. [Module Bourse du Lait (AMM)](#module-bourse-du-lait-amm)
+10. [Sécurité & secrets](#securite--secrets)
+11. [Déploiement](#deploiement)
+12. [Conventions & gotchas](#conventions--gotchas)
 
 ---
 
@@ -107,11 +108,13 @@ camplong (DB)
 │                      ├── milk_positions         (cf. § Module Bourse du Lait)
 │                      ├── milk_trades            (cf. § Module Bourse du Lait)
 │                      ├── milk_chaos_events      (cf. § Module Bourse du Lait)
-│                      └── milk_chaos_templates   (cf. § Module Bourse du Lait)
+│                      ├── milk_chaos_templates   (cf. § Module Bourse du Lait)
+│                      ├── poker_tables           (cf. § Module Poker)
+│                      ├── poker_sessions         (cf. § Module Poker)
+│                      ├── poker_hands            (cf. § Module Poker)
+│                      └── poker_hand_holes       (cf. § Module Poker)
 └── schema: prod       (mêmes tables)
 ```
-
-Les tables `poker_*` existent (préparées par `migrate_v4_extensions.py`) mais ne sont pas encore exploitées (cf. `EXTENSIONS.md`).
 
 Garanties :
 - Le code applique `SET search_path TO "<schema>", public` à chaque nouvelle connexion (ceinture)
@@ -230,6 +233,7 @@ Voir § *Module Casino* pour le détail des flows.
 - `migrate_v7_slots.py` : table `slots_spins` + seed `slots_min_bet=1`, `slots_max_bet=100`.
 - `migrate_v8_bets_v2.py` : **refonte complète des paris**. DROP de l'ancienne table `bets` (les paris non résolus doivent être refundés manuellement AVANT, le script les liste). Recrée `bets` avec son nouveau schéma + crée `bet_options`, `bet_participations`, `bet_votes`. Voir § *Module Paris*.
 - `migrate_v9_milk_chaos_templates.py` : table `milk_chaos_templates` + seed de ~33 templates (famine_mild, overstock_massive, gerard_depardieu, etc.) + seed des `app_settings` pour le bot chaos (`milk_chaos_tick_seconds=900`, `milk_chaos_proba_pct=25`, `milk_chaos_max_volatility_pct=20`).
+- `migrate_v10_poker_creator.py` : ajoute la colonne `creator_username` (nullable) à `poker_tables`. Permet aux joueurs de créer leurs propres tables et de les supprimer eux-mêmes (l'admin garde le pouvoir d'administrer toutes les tables ; `NULL` = table créée par l'admin).
 
 Chaque script s'applique aux deux schémas par défaut (`test`, puis `prod`) et est ré-exécutable sans effet de bord (CREATE IF NOT EXISTS, ON CONFLICT DO NOTHING, etc.). Lancer ensuite `seed_system_accounts.py` après v4 pour créer les wallets de `casino_bank`, `bets_escrow`, `poker_bank`, `milk_pool_lait_entier`.
 
@@ -249,7 +253,8 @@ backend/
 │                        # AppSetting, RngSeed,
 │                        # CoinflipRound, RouletteSpin, SlotsSpin,
 │                        # MilkPool, MilkPosition, MilkTrade,
-│                        # MilkChaosEvent, MilkChaosTemplate
+│                        # MilkChaosEvent, MilkChaosTemplate,
+│                        # PokerTable, PokerSession, PokerHand, PokerHandHole
 ├── schemas.py           # tous les Pydantic In/Out
 ├── security.py          # JWT decode, deps current_user / require_admin, Fernet
 ├── blockchain.py        # web3 init, helpers admin_transfer / balanceOf / nonce
@@ -262,9 +267,13 @@ backend/
 │   ├── roulette.py      # spin() : N mises agrégées → 1 lock + 1 payout net
 │   ├── slots.py         # spin() : 3 picks pondérés indépendants → release si 3-of-kind
 │   ├── amm.py           # x·y=k : current_price, buy_quote, sell_quote
-│   └── milk.py          # quote, swap (lock/release), pick_template,
-│                        # apply_chaos, clamp_to_volatility,
-│                        # chaos_analysis, position_dict, ...
+│   ├── milk.py          # quote, swap (lock/release), pick_template,
+│   │                    # apply_chaos, clamp_to_volatility,
+│   │                    # chaos_analysis, position_dict, ...
+│   └── poker.py         # Texas Hold'em : deck (shuffle seedé), eval 5/7 cartes,
+│                        # state machine (preflop→flop→turn→river→showdown),
+│                        # side-pots, sit_in/sit_out (avec auto-fold mid-main),
+│                        # defining_cards / order_for_display pour l'UI
 ├── routers/
 │   ├── users.py         # /login, /me, /transfer, /history, /orders, /me/*
 │   ├── admin.py         # /admin/login, /admin/users, /admin/credit|debit,
@@ -274,7 +283,10 @@ backend/
 │   ├── bets.py          # /bets/*, /me/bets, vote/match/cancel/resolve
 │   ├── casino.py        # /casino/{coinflip,roulette,slots}/*,
 │   │                    # /me/{coinflip,roulette,slots}
-│   └── milk.py          # /milk/pools/*, /me/milk/*
+│   ├── milk.py          # /milk/pools/*, /me/milk/*
+│   └── poker.py         # /casino/poker/tables/* (user CRUD + state/sit/leave/
+│                        # act/start-hand), /me/poker/history,
+│                        # /admin/poker/tables/* + force-end
 └── scripts/
     ├── migrate_v4_extensions.py   # tables paris/casino/lait + comptes système
     ├── migrate_v5_bet_votes.py    # colonnes creator_vote / opponent_vote
@@ -282,6 +294,7 @@ backend/
     ├── migrate_v7_slots.py        # table slots_spins + seed slots min/max bet
     ├── migrate_v8_bets_v2.py      # refonte des paris (drop + recrée + tables sous-jacentes)
     ├── migrate_v9_milk_chaos_templates.py  # table milk_chaos_templates + seeds
+    ├── migrate_v10_poker_creator.py        # poker_tables.creator_username
     └── seed_system_accounts.py    # crée bets_escrow, casino_bank, poker_bank, milk_pool_*
 ```
 
@@ -410,6 +423,8 @@ frontend/src/
 │   ├── exchange/
 │   │   ├── ShowQrLayer.vue      # layer plein écran : QR du handle (encode "camplong:<username>")
 │   │   └── ScanQrLayer.vue      # layer plein écran : caméra → scan QR → saisie montant → POST /transfer
+│   ├── poker/
+│   │   └── PlayingCard.vue      # carte (rank+suite Unicode, sm/md/lg, highlight, card-faded)
 │   └── admin/
 │       ├── AdminTopBar.vue      # nav admin avec badge nombre de demandes pending
 │       ├── TreasuryBox.vue      # treasury + CAMP en circulation + valeurs EUR
@@ -420,7 +435,8 @@ frontend/src/
     ├── LoginView.vue            # avec coin 3D low-poly animé en background
     ├── WalletView.vue           # solde + plan en 6 étapes + CTA "Envoyer des CAMP" → /exchange + historique paginé
     ├── ExchangeView.vue         # Recevoir (handle + QR) | Envoyer (scan QR ou pote + montant + note)
-    ├── CasinoView.vue           # hub casino : tuiles cliquables (coinflip + roulette + slots)
+    ├── CasinoView.vue           # hub casino : tuiles cliquables (coinflip + roulette + slots + poker)
+    ├── PokerView.vue            # lobby poker : liste des tables + formulaire de création joueur
     ├── MilkView.vue             # hub Bourse du Lait : grid pools + sparkline + prix
     ├── ProfileView.vue          # email + mot de passe
     ├── SelfCustodyView.vue      # export clé + ajout MetaMask via wallet_addEthereumChain / watchAsset
@@ -433,7 +449,9 @@ frontend/src/
     ├── casino/
     │   ├── CoinflipView.vue     # pile/face + pièce 3D CSS + provably fair
     │   ├── RouletteView.vue     # tapis HTML/CSS + roue qui décélère sur le bon n°
-    │   └── SlotsView.vue        # 3 rouleaux (Web Animations API), 3 lignes visibles
+    │   ├── SlotsView.vue        # 3 rouleaux (Web Animations API), 3 lignes visibles
+    │   └── PokerTableView.vue   # feutre ovale, sièges en ellipse, action bar sticky,
+    │                            # panneau résultat avec 7 cartes ordonnées + highlight defining
     ├── lait/
     │   └── MilkTradeView.vue    # chart SVG + swap card + position réalisable + tape trades/chaos
     └── admin/
@@ -442,6 +460,7 @@ frontend/src/
         ├── AdminOrdersView.vue      # filtres + modal "Confirmer et transférer" → tx on-chain auto
         ├── AdminBetsView.vue        # liste + filtres + force-resolve/cancel
         ├── AdminCasinoView.vue      # éditeur des app_settings (edge, limites) + PnL + RTP
+        ├── AdminPokerView.vue       # liste tables (+ créateur), create/close/delete/force-end-hand
         └── AdminMilkView.vue        # pools + bot chaos freq + analyse banque + templates + historique chaos
 ```
 
@@ -738,6 +757,112 @@ Widget Prev/Next 40×40 px (tap-friendly), affiché uniquement si `totalPages > 
 ### Concurrence
 
 Pas de `SELECT FOR UPDATE` nécessaire — chaque round/spin est indépendant et créé en une seule transaction. Les éventuels conflits de nonce treasury entre deux plays parallèles sont déjà gérés par `blockchain.py::_next_treasury_nonce()` (verrou pessimiste sur la ligne nonce).
+
+---
+
+## Module Casino — Poker (Texas Hold'em)
+
+Texas Hold'em No-Limit, 2 à 6 joueurs par table, mode "entre potes". Casse les hypothèses des autres modules : **l'état du jeu vit off-chain** (DB + blob JSON), avec mouvements on-chain uniquement au **sit-in** (lock CAMP → `poker_bank`) et au **sit-out** (release du stack restant → user). Toute la mécanique intra-main — distribution, betting rounds, showdown — est en DB.
+
+### Pattern d'architecture
+
+- **Pas de WebSocket.** Le front poll `GET /casino/poker/tables/{id}/state` toutes les 2 s. Suffisant pour quelques dizaines de joueurs ; garde le backend stateless inter-requêtes.
+- **État d'une main = blob JSON** dans `poker_hands.hand_log` (deck restant côté serveur uniquement, joueurs avec stack/bet/folded/all_in, street, pot, current_bet, min_raise, to_act_seat, log des actions). `ended_at IS NULL` ⇒ main en cours.
+- **Stacks off-chain.** `poker_sessions.stack` reflète le tapis devant chaque joueur, mis à jour à la fin de chaque main. Les CAMP réels restent sur le wallet `poker_bank` jusqu'au sit-out.
+- **Concurrence.** `SELECT FOR UPDATE` sur la ligne `poker_tables` à chaque mutation (sit, leave, act, start-hand). Sérialise les requêtes concurrentes sur une même table.
+- **Provably-fair deck.** `services/randomness.py` commit-reveal + Fisher-Yates seedé sur `combined_hash` (`combined_hash = sha256(server_seed + ":" + "table=N:hand=K")`). Le serveur révèle le seed à la fin de la main : un joueur peut recalculer le deck initial et vérifier l'ordre des cartes.
+- **Auto-fold sur leave.** `POST /leave` accepte d'être appelé mid-main : on auto-fold le joueur, on avance la partie sans lui pour les autres, on cashout son stack. Sa mise courante reste dans le pot (perdue). Permet de quitter sans bloquer la table.
+
+### Tables DB
+
+**`poker_tables`** — config d'une table.
+- `name`, `blind_small`, `blind_big`, `min_buyin`, `max_buyin`, `max_players` (2..10), `status` `open`/`closed`.
+- `creator_username` (nullable) : `NULL` = table créée par l'admin. Sinon, le joueur peut supprimer sa propre table tant qu'elle est vide.
+
+**`poker_sessions`** — un siège occupé.
+- `table_id`, `username`, `seat`, `stack`, `initial_stack`.
+- `left_at` IS NULL ⇒ session active. Un user n'a qu'une session active par table (UNIQUE partial index).
+- `tx_hash_buyin` / `tx_hash_cashout` : lien on-chain vers les mouvements d'escrow.
+
+**`poker_hands`** — une main jouée.
+- `hand_number` séquentiel par table, `dealer_seat`, `rng_seed_id`.
+- `hand_log` (TEXT) : blob JSON complet (state machine). À la fin de la main, le `deck` est blanchi du log pour ne pas leaker les cartes futures (en cas de force-end).
+- `board_cards`, `pot`, `winners_json`, `ended_at` peuplés au settlement.
+
+**`poker_hand_holes`** — cartes privées par joueur pour une main (`ON DELETE CASCADE` vers `poker_hands`). Strictement server-side ; pas exposées via l'API sauf pour le joueur lui-même (in-game) ou au showdown (settlement).
+
+### Cycle d'une main
+
+1. Un joueur assis clique **"Nouvelle main"** → `POST /start-hand`. Pré-conditions (`can_start_hand`) : table `open`, pas de main en cours, ≥2 joueurs avec `stack ≥ blind_big`.
+2. Commit RNG seed (`purpose='poker'`), shuffle Fisher-Yates(`combined_hash`), distribute 2 hole cards par joueur en partant du SB (deux tours).
+3. Post SB + BB. `current_bet = BB`, `min_raise = BB`, `to_act_seat = next(BB)` (post-BB en pré-flop ; en heads-up, le dealer = SB joue en premier).
+4. **Betting round** : `fold` / `check` / `call` / `bet` / `raise`. Un all-in court (< min_raise) est toléré mais ne ré-ouvre PAS l'action (les joueurs ayant déjà `has_acted=True` peuvent juste call ou fold ensuite).
+5. Quand la street est complète (tous égaux + tous `has_acted`), avance flop → turn → river. Si un seul joueur reste non-folded → fin direct, il rafle le pot sans showdown (`force_winner_seat`).
+6. Si tous les actifs sont all-in après une street → `_run_out_board` : on déroule les cartes restantes puis showdown.
+7. **Showdown** : `eval_best` (5 parmi 5..7) sur chaque main non-foldée. Side-pots calculés par paliers de `total_bet`. Les folded sont exclus des gagnants ; leur main est néanmoins évaluée pour transparence (révélée dans `shown_holes`).
+8. Stacks mis à jour dans `poker_sessions`. **Aucune tx on-chain** au settlement (les chips étaient déjà off-chain depuis le sit-in).
+
+### Endpoints
+
+| Méthode | Route                                          | Auth  | Description                                          |
+|---------|------------------------------------------------|-------|------------------------------------------------------|
+| GET     | `/casino/poker/tables`                         | user  | Liste avec `im_in`, `im_creator`, `creator_username` |
+| POST    | `/casino/poker/tables`                         | user  | Créer une table (any user, `creator_username = caller`) |
+| DELETE  | `/casino/poker/tables/{id}`                    | user  | Réservé au créateur, refusé si table non-vide        |
+| GET     | `/casino/poker/tables/{id}/state`              | user  | Snapshot (cible polling 2 s). Pas d'auto-deal — la main suivante est déclenchée explicitement. |
+| POST    | `/casino/poker/tables/{id}/sit`                | user  | Sit-in (buyin clamp `[min_buyin, max_buyin]`)        |
+| POST    | `/casino/poker/tables/{id}/leave`              | user  | Sit-out. Mid-main : auto-fold + cashout              |
+| POST    | `/casino/poker/tables/{id}/start-hand`         | user  | Lance la prochaine main (any seated player)          |
+| POST    | `/casino/poker/tables/{id}/act`                | user  | fold / check / call / bet / raise                    |
+| GET     | `/me/poker/history`                            | user  | Mes mains finies (filtrées sur le username dans `hand_log`) |
+| GET     | `/admin/poker/tables`                          | admin | + sessions, mains jouées, main en cours              |
+| POST    | `/admin/poker/tables`                          | admin | Créer (`creator_username = NULL`)                    |
+| PATCH   | `/admin/poker/tables/{id}`                     | admin | Update `status` (`open` / `closed`)                  |
+| DELETE  | `/admin/poker/tables/{id}`                     | admin | Cascade-delete (`poker_hands` → `poker_hand_holes` via FK CASCADE, puis `poker_sessions`, puis la table) |
+| POST    | `/admin/poker/tables/{id}/force-end`           | admin | Annule la main en cours, **refund chaque mise au joueur** (réplique `total_bet` dans le stack). Sert à débloquer une table AFK. |
+
+### Évaluateur de mains (`services/poker.py`)
+
+~80 lignes sans dépendance externe (pas de `treys`) :
+
+- `eval_5(cards: list[str])` → tuple `(catégorie, *tiebreakers)`. Catégories 1..9 : carte haute, paire, deux paires, brelan, suite, couleur, full, carré, quinte flush. Wheel A-2-3-4-5 traitée (high = 5).
+- `eval_best(N_cards)` → meilleure main 5 parmi N via `itertools.combinations`.
+- `defining_cards(score, best_5)` → sous-ensemble qui **définit** la combinaison (la paire seule, le brelan, les deux paires, l'as haut, etc. — sans kickers). Utilisé côté UI pour ne surligner que les cartes qui font *gagner*.
+- `order_for_display(7_cards, score, best_5)` → réordonne les 7 cartes : le pattern d'abord dans un ordre lisible (suite en ascendant, full house = trips puis pair, paires groupées, etc.), puis les 2 cartes mortes en descendant.
+
+### Sit-out mid-main (auto-fold)
+
+`POST /leave` est non-bloquant. Si l'utilisateur est encore dans la main et non-foldé :
+
+1. `_force_fold(state, user)` : marque `folded=True`, log `fold_leave`.
+2. Si un seul joueur reste actif → `_finalize` immédiat (winner par fold).
+3. Sinon, si la street devient complète → `_advance_street`.
+4. Sinon, si c'était son tour → `to_act_seat = _next_to_act_seat(state, his_seat)`.
+5. Sinon (pas son tour) → on sauve l'état tel quel.
+6. Sa mise courante (`total_bet`) reste dans le pot et ira au gagnant. Son stack restant (`state.players[i].stack`) est libéré on-chain (release `poker_bank` → user).
+
+### Frontend
+
+- **`views/PokerView.vue`** (lobby `/casino/poker`) : grid des tables avec créateur, blinds, buyin, sièges occupés. Formulaire collapsible "+ Nouvelle table" : any user peut créer (mêmes validations que côté admin). Bouton "Supprimer" sur les tables `im_creator` (désactivé si non-vide). Refresh doux 5 s.
+- **`views/casino/PokerTableView.vue`** (`/casino/poker/{id}`) : feutre ovale CSS, sièges placés en ellipse autour, avec rotation logique pour que le siège du joueur courant soit toujours en bas. Centre = board (5 cartes max, taille `lg`) + pot + street tag. Pulse doré sur le siège à `to_act`. Action bar **sticky bottom** (mobile-first, 44 px touch targets), input raise grow-to-fill, bouton All-in gold.
+- **Panneau résultat ("Main #X")** : pour CHAQUE joueur (winners + losers + folded), affiche les **7 cartes** (`display_cards` = hole + board réordonnées). Seules les cartes du set `defining_cards` portent le `highlight` doré ; les autres sont en `card-faded` (opacity 0.4 + grayscale). Avatar + nom + tag "toi" + montant net en pill vert/rouge. Folded players ont leur main hypothétique évaluée + label "Foldé · Brelan d'As" par exemple.
+- **Siège après la main** : les 2 hole cards de chaque joueur restent visibles sur le feutre mais en `card-faded` (la "vraie" évaluation est dans le panneau en dessous).
+- **`components/poker/PlayingCard.vue`** : composant carte (rank+suite Unicode, sm/md/lg, `highlight` = ring doré, `card-faded` = opacity + grayscale, `hidden` = dos bleu).
+- **Polling.** `stores/poker.js::startPolling(tableId)` retourne un `stop()` à appeler en `onBeforeUnmount` (POLL_MS = 2000).
+
+### Admin (`views/admin/AdminPokerView.vue`)
+
+- Liste de toutes les tables avec créateur affiché (`<username>` ou "admin"), sessions actives, nombre de mains jouées, ID de la main en cours.
+- Création de tables admin (`creator_username = NULL`).
+- Toggle `open` ↔ `closed` (les mains en cours continuent, les nouveaux sit-in sont refusés).
+- **Force-end-hand** : annule la main en cours et rend `total_bet` à chacun. Pas de tx on-chain (les stacks sont off-chain).
+- Suppression cascade (refusée si seats non-vides ; pour les tables admin avec des sessions historiques, cf. `_cascade_delete_table` qui DELETE les mains/sessions avant la table — sinon le FK constraint sur `poker_sessions.table_id` bloque).
+
+### Limites connues
+
+- **Mono-instance recommandé.** Le polling 2 s × N joueurs n'est pas un goulot, mais la concurrence repose sur `SELECT FOR UPDATE` Postgres : multi-instance fonctionne, sans état serveur partagé.
+- **Pas de timeout.** Un joueur AFK bloque la main jusqu'à un `force-end` admin. Acceptable entre potes ; à ajouter (background task qui auto-fold après X minutes d'inactivité) pour un produit ouvert.
+- **History endpoint** filtre par username via `hand_log LIKE`. Suffisant pour ~20 mains affichées (`limit*4` fetched côté DB) ; pour grossir, dénormaliser via `poker_hand_holes` (1 row par participation).
 
 ---
 
