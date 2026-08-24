@@ -1,6 +1,6 @@
 import datetime
 import bcrypt
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from jose import jwt
@@ -15,6 +15,7 @@ from security import current_user, fernet
 from blockchain import admin_transfer, get_balance_camp, treasury
 from email_service import send_admin_new_order
 from config import JWT_SECRET
+from services import analytics as analytics_svc
 
 router = APIRouter(tags=["users"])
 
@@ -322,3 +323,42 @@ def list_my_orders(
           .all()
     )
     return [_order_dict(r) for r in rows]
+
+
+# ─── Mes stats ─────────────────────────────────────────
+
+@router.get("/me/stats")
+def my_stats(
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+    since: str = Query(None, description="Date ISO de debut de periode (UTC)."),
+):
+    """
+    Recap perso : PnL sur la periode, activite par jeu, positions lait.
+
+    Meme moteur que le dashboard admin, mais restreint au user courant : un
+    seul appel RPC au lieu d'un par joueur. On ne renvoie ni les totaux ni les
+    podiums, qui n'auraient aucun sens calcules sur une seule personne.
+
+    Le classement general reste servi par /leaderboard (soldes publics, deja
+    affiches dans le bandeau defilant).
+    """
+    parsed = None
+    if since:
+        try:
+            parsed = datetime.datetime.fromisoformat(since.replace("Z", ""))
+        except ValueError:
+            raise HTTPException(400, f"Date `since` invalide : {since!r}")
+
+    report = analytics_svc.overview(db, parsed, get_balance_camp,
+                                    only=[user.username])
+    if not report["users"]:
+        raise HTTPException(404, "Aucune statistique pour ce compte")
+
+    return {
+        "since": report["since"],
+        "generated_at": report["generated_at"],
+        "me": report["users"][0],
+        # Marche global : sert a situer ses positions lait dans les pools.
+        "pools": report["pools"],
+    }

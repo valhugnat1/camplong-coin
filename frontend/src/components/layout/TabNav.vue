@@ -22,6 +22,7 @@ const tabs = [
   { to: "/paris", icon: "🎯", label: "Paris" },
   { to: "/casino", icon: "🎰", label: "Casino" },
   { to: "/milk", icon: "🥛", label: "Bourse du Lait" },
+  { to: "/stats", icon: "📊", label: "Mes stats" },
 ];
 </script>
 

@@ -16,6 +16,13 @@
           🏠 Vue d'ensemble
         </router-link>
         <router-link
+          to="/admin/stats"
+          class="nav-link"
+          :class="{ active: $route.path.startsWith('/admin/stats') }"
+        >
+          📊 Stats
+        </router-link>
+        <router-link
           to="/admin/orders"
           class="nav-link"
           :class="{ active: $route.path === '/admin/orders' }"

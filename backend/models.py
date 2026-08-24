@@ -490,3 +490,34 @@ class SlotsSpin(Base):
     ts = Column(DateTime, server_default=func.now(), nullable=False)
     tx_hash_lock = Column(String(66), nullable=True)
     tx_hash_payout = Column(String(66), nullable=True)
+
+
+class AnalyticsTxLabel(Base):
+    """
+    Reclassification manuelle d'un mouvement de tresorerie, pour le dashboard
+    analytics uniquement.
+
+    Table PUREMENT ADDITIVE : elle ne modifie jamais `transactions`, qui reste
+    le journal immuable des mouvements on-chain. On se contente de dire
+    COMMENT compter une ligne existante. Supprimer cette table ne fait perdre
+    que les ajustements, jamais des donnees financieres.
+
+    Cas d'usage : un credit admin qui etait en realite la mise de depart d'un
+    joueur (oubliee a l'onboarding) doit compter comme capital initial et non
+    comme recharge, sinon il apparait comme quelqu'un qui a recharge.
+
+    label :
+      - 'onboarding' : capital de depart (compte hors periode, c'est la base)
+      - 'topup'      : vraie recharge
+      - 'withdrawal' : vrai retrait
+      - 'ignore'     : exclu de tout calcul (erreur, test, correction interne)
+    """
+    __tablename__ = "analytics_tx_labels"
+    __table_args__ = {"schema": DB_SCHEMA}
+
+    tx_id = Column(Integer, primary_key=True)      # -> transactions.id
+    label = Column(String(16), nullable=False)
+    note = Column(String(256), default="")
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(),
+                        onupdate=func.now(), nullable=False)

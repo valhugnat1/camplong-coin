@@ -121,6 +121,12 @@ const routes = [
     component: () => import("@/views/OrdersView.vue"),
     meta: { needsUser: true },
   },
+  {
+    path: "/stats",
+    name: "my-stats",
+    component: () => import("@/views/MyStatsView.vue"),
+    meta: { needsUser: true },
+  },
 
   // ─── Admin ────────────────────────────────────────────────
   {
@@ -133,6 +139,12 @@ const routes = [
     path: "/admin",
     name: "admin",
     component: () => import("@/views/admin/AdminView.vue"),
+    meta: { needsAdmin: true },
+  },
+  {
+    path: "/admin/stats",
+    name: "admin-stats",
+    component: () => import("@/views/admin/AdminStatsView.vue"),
     meta: { needsAdmin: true },
   },
   {

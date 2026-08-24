@@ -17,6 +17,7 @@ from schemas import (
     SettingUpdateIn,
     AdminMilkCreatePoolIn, AdminMilkUpdatePoolIn, AdminMilkInjectIn,
     AdminMilkTemplateIn, AdminMilkTemplateUpdateIn,
+    AnalyticsLabelIn,
 )
 from security import require_admin, fernet
 from blockchain import admin_transfer, get_balance_camp, get_balance_eth, treasury
@@ -24,6 +25,7 @@ from email_service import send_user_order_done
 from config import ADMIN_PASSWORD, JWT_SECRET
 from services import escrow, coinflip, roulette, slots, milk as milk_svc
 from services import settings as settings_svc
+from services import analytics as analytics_svc
 from routers.bets import (
     _bet_dict, _settle_resolved, _participations_for, _options_for,
     BETS_ESCROW_ROLE, ADMIN_RESOLVED_BY,
@@ -1157,3 +1159,78 @@ def admin_chaos_analysis(
         "max_volatility_pct": max_vol,
     }
     return analysis
+
+
+# ─── Analytics (qui a fait quoi depuis le debut) ───────
+
+def _parse_since(since: str | None) -> datetime.datetime | None:
+    """Parse le query param `since` (ISO, UTC). None => defaut du service."""
+    if not since:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(since.replace("Z", ""))
+    except ValueError:
+        raise HTTPException(
+            400, f"Date `since` invalide : {since!r} (format ISO attendu)"
+        )
+
+
+@router.get("/analytics")
+def admin_analytics(
+    _: bool = Depends(require_admin),
+    db: Session = Depends(get_db),
+    since: str = Query(
+        None,
+        description="Date ISO de debut de periode (UTC). Defaut : 22/08/2026 20h UTC "
+                    "= 22h Paris, le lancement.",
+    ),
+):
+    """
+    Vue transverse par joueur : d'ou vient son argent, ou il est maintenant,
+    et combien il a gagne ou perdu par activite.
+
+    Le PnL affiche est net des recharges : on compare la valeur totale actuelle
+    (wallet + lait + paris bloques + stacks poker) a tout ce qui a ete injecte
+    depuis la tresorerie (onboarding + recharges - retraits). Un joueur qui a
+    recharge 500 CAMP et qui les a perdus ressort a -500, pas a 0.
+
+    `since` ne filtre que l'activite de jeu (parties, trades, paris) ; les
+    depots sont toujours comptes depuis l'origine, sinon le PnL n'a pas de sens.
+    """
+    return analytics_svc.overview(db, _parse_since(since), get_balance_camp)
+
+
+@router.get("/analytics/flows")
+def admin_analytics_flows(
+    _: bool = Depends(require_admin),
+    db: Session = Depends(get_db),
+    since: str = Query(None, description="Date ISO de debut de periode (UTC)."),
+):
+    """
+    Mouvements user <-> tresorerie avec leur classification courante, pour
+    l'ecran d'ajustement.
+
+    `source='auto'` = deduit de la note posee a l'ecriture.
+    `source='manual'` = l'admin a corrige.
+    """
+    return analytics_svc.flows_detail(db, _parse_since(since))
+
+
+@router.put("/analytics/flows/{tx_id}")
+def admin_analytics_set_label(
+    tx_id: int,
+    body: AnalyticsLabelIn,
+    _: bool = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Reclasse un mouvement de tresorerie pour le dashboard.
+
+    N'ecrit que dans `analytics_tx_labels` : la ligne `transactions` d'origine,
+    qui reflete un mouvement on-chain reel, n'est jamais modifiee. `label=null`
+    retire la correction et revient a la classification automatique.
+    """
+    try:
+        return analytics_svc.set_label(db, tx_id, body.label, body.note or "")
+    except ValueError as e:
+        raise HTTPException(400, str(e))

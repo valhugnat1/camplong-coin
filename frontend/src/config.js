@@ -32,6 +32,19 @@ export const PAYMENT = {
   revolut: '@hugo1weu7'
 }
 
+// Mise de depart affichee aux joueurs. Tout le monde a ete remis a 1000 CAMP
+// au lancement (22/08/2026), c'est le repere commun de la partie.
+//
+// A NE PAS confondre avec la base de calcul du PnL : le backend, lui, repart
+// de la valeur REELLE de chacun au cutoff (`opening_value_camp`, reconstruite
+// depuis le ledger). Les deux coincident pour la quasi-totalite des joueurs ;
+// pour les rares comptes dont le solde a bouge entre le reset et le lancement,
+// l'affichage est arrondi a la convention et `resultat = fortune - 1000` peut
+// donc tomber legerement a cote. Choix assume : le repere commun est plus
+// parlant pour un joueur que sa valeur d'ouverture exacte.
+// La page admin /admin/stats affiche la valeur reelle, elle.
+export const STARTING_CAMP = 1000
+
 // Paris communautaires (doit rester en sync avec backend/config.py BETS)
 export const BETS = {
   minStake: 1,

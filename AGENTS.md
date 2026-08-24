@@ -15,9 +15,10 @@ Document destiné aux développeurs (humains ou agents IA) qui veulent contribue
 7. [Module Casino (coinflip + roulette + slots)](#module-casino-coinflip--roulette--slots)
 8. [Module Casino — Poker (Texas Hold'em)](#module-casino--poker-texas-holdem)
 9. [Module Bourse du Lait (AMM)](#module-bourse-du-lait-amm)
-10. [Sécurité & secrets](#securite--secrets)
-11. [Déploiement](#deploiement)
-12. [Conventions & gotchas](#conventions--gotchas)
+10. [Module Analytics admin (qui a fait quoi)](#module-analytics-admin-qui-a-fait-quoi)
+11. [Sécurité & secrets](#securite--secrets)
+12. [Déploiement](#deploiement)
+13. [Conventions & gotchas](#conventions--gotchas)
 
 ---
 
@@ -1015,6 +1016,155 @@ Subtilité : `formatBottles(balance_milk)` doit utiliser `Math.floor`, pas `toFi
 ### Concurrence
 
 `SELECT ... FOR UPDATE` sur la row `milk_pools` est obligatoire à chaque swap (sinon front-running entre deux swaps quasi-simultanés). Le bot chaos tourne en arrière-plan et n'utilise pas `FOR UPDATE` — il accepte qu'un swap user puisse passer "entre" la lecture et l'écriture de `reserve_milk`, parce qu'il commit son delta sur la valeur observée. L'invariant à préserver est juste : `reserve_milk` ne descend jamais sous `MIN_RESERVE_MILK = 1000` (1 btl), pour éviter une division par zéro / prix infini.
+
+---
+
+## Module Analytics admin (qui a fait quoi)
+
+Vue transverse pour l'admin : d'où vient l'argent de chaque joueur, où il est
+maintenant, et combien il a gagné ou perdu par activité.
+
+**Endpoint** : `GET /admin/analytics?since=<ISO UTC>` (admin-auth) →
+`services/analytics.py::overview()`. **Frontend** : `/admin/stats`
+(`AdminStatsView.vue`, client `api/analytics.js`).
+
+### Le calcul qui compte : le PnL net des recharges
+
+```
+pnl = valeur_actuelle - (valeur_à_l_ouverture + dépôts - retraits)
+
+valeur = solde on-chain du wallet
+       + valeur réalisable des positions lait
+       + CAMP bloqués dans les paris en cours
+       + stacks de poker des sessions actives
+```
+
+**La valeur à l'ouverture est reconstruite, pas supposée.** Chaque mouvement de
+wallet étant journalisé dans `transactions`, on remonte le temps :
+
+```
+solde_au_cutoff = solde_actuel - entrées_depuis_cutoff + sorties_depuis_cutoff
+```
+
+Supposer « 1000 CAMP pour tous au départ » était faux et fausse le classement :
+les joueurs avaient déjà une histoire au moment du cutoff (parties de test,
+reset admin, recharges antérieures). Constaté sur les données réelles : 439
+transactions et 230 parties précèdent le lancement du 22/08.
+
+Deux pièges que ce calcul évite, et qu'il ne faut pas "simplifier" :
+
+- **Le solde on-chain seul ne suffit pas.** Acheter du lait envoie les CAMP sur
+  le compte système du pool : le wallet baisse alors que le joueur n'a rien
+  perdu. Sans le rattrapage lait/paris/poker, tout investisseur apparaîtrait en
+  perte du montant qu'il a investi.
+- **Les positions lait sont valorisées en `sell_quote` sur tout le stock**, pas
+  au prix spot. Sur un AMM, une grosse position ne se déboucle pas au spot : on
+  descend la courbe. 1000 bouteilles dans un pool de 10 000 valent ~910 CAMP,
+  pas 1000.
+
+### Règle de période
+
+`since` (défaut `2026-08-22 20:00 UTC` = 22h Paris, lancement) filtre **tout** :
+parties, trades, paris, recharges, retraits. Ce qui précède n'est pas ignoré
+pour autant — c'est absorbé par la valeur à l'ouverture, donc compté une fois
+et une seule.
+
+**Invariant à préserver** (vérifié par les tests) : pour un joueur sans
+mouvement de trésorerie pendant la période,
+
+```
+pnl_total = pnl_casino + pnl_lait + pnl_paris + pnl_poker
+```
+
+S'il casse, une activité est comptée deux fois ou pas du tout.
+
+⚠️ `bets.pnl` et `poker.pnl` ajoutent les CAMP **encore engagés** (`gagné −
+misé + encore_bloqué`). Sans ce terme, un pari en cours s'afficherait comme une
+perte sèche du montant misé.
+
+Deux approximations assumées, faute d'historique en base : la valeur d'une
+position lait au cutoff utilise le dernier prix connu avant `since` (les chaos
+events survenus entre-temps ne sont pas rejoués), et un stack de poker à cheval
+sur le cutoff est estimé à son buy-in.
+
+### Ajuster la classification d'un dépôt
+
+Table `analytics_tx_labels` (migration v11) : `tx_id` → `label` ∈
+`onboarding | topup | withdrawal | ignore`.
+
+**Purement additive.** Elle ne modifie jamais `transactions`, qui reste le
+journal immuable des mouvements on-chain ; elle dit seulement *comment compter*
+une ligne existante. La supprimer ne fait perdre que les ajustements. Le
+backend tourne sans elle : `_labels()` attrape l'erreur "table inexistante",
+`rollback()` (indispensable, sinon la session Postgres reste en erreur) et
+retombe sur la déduction automatique — donc déploiement et migration peuvent se
+faire dans n'importe quel ordre.
+
+Cas d'usage réel : une mise de départ versée à la main **après** le lancement
+via `/admin/credit` porte la note `credit admin`, donc compte comme une
+recharge et sort le joueur du classement "sans recharger". L'admin la reclasse
+en `onboarding` depuis `/admin/stats` → panneau *Ajuster les dépôts*.
+
+Endpoints : `GET /admin/analytics/flows` (liste + classification courante,
+`source` = `auto` | `manual`) et `PUT /admin/analytics/flows/{tx_id}`
+(`label: null` retire la correction).
+
+### Séparer l'argent injecté de l'argent gagné
+
+Tout repose sur les sentinelles de `transactions` (voir *Conventions*) :
+
+| Mouvement | Sens | Signification |
+|---|---|---|
+| `__treasury__` → user | dépôt | onboarding (`note='onboarding'`), crédit admin, order `buy` passé en `done` |
+| user → `__treasury__` | retrait | débit admin, order `sell` passé en `done` |
+| user ↔ `__<role>__` | interne | jeu (casino_bank, bets_escrow, milk_pool_*, poker_bank) |
+
+C'est ce qui permet de répondre à « qui a gagné le plus **sans recharger** » :
+les recharges gonflent `net_deposited`, donc ne gonflent pas le PnL. Le flag
+`has_topped_up` / `topups_camp` expose qui a rechargé.
+
+`since` ne filtre **que** l'activité de jeu (parties, trades, paris rejoints).
+Les dépôts sont toujours comptés depuis l'origine — sinon le PnL n'a pas de
+sens. Défaut : `2026-08-22 20:00 UTC` (= 22h Paris, lancement de l'app).
+
+### Contenu de la réponse
+
+- `totals` : valeur détenue, argent injecté, PnL global, investi en bourse,
+  volume casino, nombre d'actions.
+- `podiums` : meilleur/pire PnL, a plumé/nourri le casino, le plus actif, plus
+  gros volume misé, meilleur tradeur de lait, plus grosse position.
+- `users[]` : une ligne par joueur avec le détail casino (par jeu), lait
+  (trades, flux réalisé, positions), paris, poker, et la décomposition des
+  dépôts.
+- `pools[]` : par bourse, nombre de détenteurs, bouteilles détenues, valeur
+  réalisable agrégée et PnL latent.
+
+⚠️ La somme des valeurs réalisables individuelles **surestime** ce que le pool
+pourrait effectivement payer si tout le monde vendait en même temps (chacun est
+quoté comme s'il vendait seul). `pools[].reserve_camp` donne le plafond réel.
+
+### Écran joueur
+
+`GET /me/stats` (user-auth) → même moteur, restreint au joueur courant via
+`overview(..., only=[username])`, donc **un seul appel RPC** au lieu d'un par
+joueur. Ne renvoie ni `totals` ni `podiums` : ils n'ont pas de sens calculés sur
+une personne. Vue : `/stats` (`MyStatsView.vue`, onglet 📊 Mes stats).
+
+La page se termine par le classement complet servi par `/leaderboard` — la même
+source que le bandeau défilant (`Ticker.vue`), en version lisible avec la ligne
+du joueur surlignée. Attention à la nuance, expliquée dans l'UI : ce classement
+range par **CAMP dans le wallet**, alors que le P&L de la page range par valeur
+totale — un joueur très investi en lait a un petit wallet.
+
+Côté admin, chaque podium a un « voir plus » qui déplie le classement complet
+pour ce critère. Le tri est refait **côté client** depuis `report.users` (qui
+contient déjà tout le monde) plutôt que par un appel API supplémentaire.
+
+### Coût
+
+Un appel RPC `balanceOf` par joueur (même pattern que `/admin/users`, et que
+`/leaderboard` que le Ticker appelle déjà toutes les 30 s). Le reste est agrégé
+en SQL (`GROUP BY`), pas en Python.
 
 ---
 

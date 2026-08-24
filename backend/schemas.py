@@ -217,3 +217,12 @@ class AdminPokerUpdateTableIn(BaseModel):
 
 class SettingUpdateIn(BaseModel):
     value: str = Field(..., min_length=1, max_length=256)
+
+
+class AnalyticsLabelIn(BaseModel):
+    """
+    Reclassification d'un mouvement de tresorerie pour le dashboard admin.
+    `label=None` retire la correction manuelle (retour a la deduction auto).
+    """
+    label: Optional[str] = None   # 'onboarding'|'topup'|'withdrawal'|'ignore'|None
+    note: Optional[str] = ""
